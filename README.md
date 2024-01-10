@@ -1,6 +1,6 @@
 # Corra_projects
 
-This GitHub repository is designed to showcase three distinct projects:
+This GitHub repository is designed to showcase four distinct projects:
 
 1. [Named Entity Recognition](./Named%20Entity%20Recognition/)
 2. [Image captioning](./Image%20Captioning/)
