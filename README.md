@@ -5,6 +5,7 @@ This GitHub repository is designed to showcase three distinct projects:
 1. [Named Entity Recognition](./Named%20Entity%20Recognition/)
 2. [Image captioning](./Image%20Captioning/)
 3. [Digit recognition](./Digit%20Recognition/)
+4. [Bayesian hierarchical model: mortality risk](./Bayesian%20hierarchical%20model/)
 
 ## Named Entity Recognition 
 
@@ -46,6 +47,14 @@ The model architecture includes two inner layers, both employing the hyperbolic 
 The optimization technique involves the mini-batch stochastic gradient method with Adam diagonal scaling, implemented in a Python function. The model's weights minimizing the loss function are used for testing the dataset, resulting in a final accuracy of 95.85%.
 
 Here's the direct link to access the [Colab Notebook](https://colab.research.google.com/drive/1TK-7WaA8z2IcNJuiF0ClE3FvFsqM4hsx#scrollTo=14fa7869).
+
+## Quantifying the Effect of Beta Blockers on Mortality: A Bayesian Hierarchical Meta-Analysis
+
+The research aims at applying Bayesian Hierarchical methodology for meta-analysis of 13 studies on short-term mortality in patients admitted to coronary units after myocardial infarctions, and treated with intravenious beta-blockers.
+
+Repository for final project in Bayesian Modelling course for Data Analytics for Business MSc course in Università Cattolica del Sacro Cuore (Milan, Italy). Project completed by Corrà Sara and Shaboian Goar.
+
+In the context of the project, reference is made to the following scientific paper: Yusuf, S., Peto, R., Lewis, J., Collins, R., & Sleight, P. (1985). Beta blockade during and after myocardial infarction: An overview of the randomized trials. Progress in Cardiovascular Disease.
 
 
 
