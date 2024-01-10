@@ -1,0 +1,1012 @@
+---
+title: "233"
+author: "Goar Shaboian"
+date: "2023-07-09"
+output:
+  bookdown::pdf_document2:
+    toc: false
+  pdf_document: default
+  officedown::rdocx_document: default
+  bookdown::html_document2: default
+fig.caption: yes
+always_allow_html: yes
+bibliography: bibliography.bib 
+header-includes:
+  - \usepackage{xcolor}
+  - \definecolor{lemon}{rgb}{1, 0.95, 0.90}
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library (bookdown)
+library (officedown)
+library(metadat) # datasets
+library(tidyverse)
+library(dplyr)
+library(mcmcr) # as.mcmc
+library(ggplot2)
+library(RColorBrewer) # palettes
+library(scales) # show_col
+library(wesanderson) # yellow
+library(patchwork)
+library(coda)
+library(flextable)
+library(latex2exp) # latex in ggplots
+library(LaplacesDemon)
+library(gridExtra)
+library(kableExtra)
+library (HDInterval) # hdi's
+```
+```{r col, warning=FALSE, message=FALSE, echo=FALSE}
+mypal <- brewer.pal (11, 'RdBu')
+mypal [12] <- wes_palette(name = ("Cavalcanti1"), n = 5 ) [1]
+```
+```{r data-loading, warning=FALSE, message=FALSE, echo=FALSE}
+infarct <- dat.yusuf1985 
+infarct <- na.omit (infarct)
+infarct$ntot <- infarct$n1i + infarct$n2i
+infarct <- infarct %>%
+  filter (ai != 0 & ci != 0 & table == '9')
+first.ratio <- infarct$ai / (infarct$n1i - infarct$ai)
+second.ratio <- infarct$ci / (infarct$n2i - infarct$ci)
+infarct$units <- log (first.ratio) - log (second.ratio)
+infarct$sigma2 <- 1/infarct$ai + 1/(infarct$n1i-infarct$ai) +
+  1/infarct$ci + 1/(infarct$n2i-infarct$ci)
+units <- infarct$units
+```
+# Introduction 
+Myocardial infarctions, defined as damage to the myocardium caused by lack of oxygen, result in a significant number of fatalities every year (@mechanic2017acute). Among the available pharamocological agents used for infarction prevention and damage minimization are beta-blockers, which aim at slowing down the heart rate. However, there are certain risks of secondary effects associated with their application, hence it is essential to conduct comprehensive research to determine how effective this medication is in alleviating risks associated with heart attacks. The study conducted by @yusuf1985beta aims at investigating the efficiency of beta blockers by aggregating results on 65 individual clinical trials, which covered oral and intravenous (IV) administration of the medication, both on short-term and long-term time frames. Various end-points, such as infarction size, arrhythmias, threatened infarctions, were considered, with mortality rates being the primary focus. Drawing meaningful conclusions based on data obtained from individual studies requires aggregating the results in an appropriate way, which implies implementing statistical methodology known as meta-analysis, the theoretical and methodological aspects of which will be the focus of this project. 
+
+# Methodology
+
+## Description of the dataset
+For the original analysis, @yusuf1985beta collected data from randomised clinical trials through computer search and personal contact in the research field. The studies were included irrespective of results that individual researchers obtained. For quantification of the findings, the Peto odds ratio was used, which is a common way of approaching meta-analysis in a frequentist perspective. The estimator is defined as follows:
+$$ log (\widehat{POR}) = \frac{\sum_{i=1}^{s}(O_i-E_i)}{\sum_{i=1}^{s}V_i}, \ \ where $$
+*O* is the observed number of occurrences of the investigated event, *E* is the expected number in the treatment group, and *V* is the estimate of the variance (@brockhaus2014peto). The results of the estimation for the long-term (3 months to 1 year) framework provided evidence for a noticeable (20%) reduction in the total number of deaths for patients in the treatment groups was found. Conclusions on effectiveness of beta blockage in the long term were also confirmed by other researchers (@carlin1992meta, @shu2012long). On the other hand, for short-term (at one week) beta-blocker application, @yusuf1985beta discovered improvements in terms of infarction size and ventricular arrhythmia, however, no conclusive evidence of the effects of treatment on mortality was found: only 6% risk of death reduction was determined. This analysis aims at attempting to apply Bayesian methodology to determine whether substantial conclusions can be drawn on the efficacy of short-term beta blockage in the short-term time frame for patients treated for myocardial infarctions. 
+
+The outcomes of 15 studies^[Studies that provided number of deaths in either treatment or control groups equal to 0 were not included in the analysis] that performed medical trials, with subjects in the treatment groups being administered beta-blockers intravenously upon admission to the coronary care units, were used. Different types of beta-blockers were administered in each trial, including both cardioselective and non-cardioselective. No distinction for the type of medication used was controlled for, relying on the conclusions of @yusuf1985beta based on enzyme analysis. 
+
+The observational data is binomial: total number of patients and number of deaths are recorded for both control *($n_0$)* and treatment *($n_1$)*groups. 2x2 tables can be used to meaningfully represent such data (@bovbjerg-2020), observing the effects of treatment for each study. For statistical analysis, a common way to treat binomial data is by using the *empirical logit* estimator (@gelman2013bayesian, p. 125):
+$$ y_j = log \ (\frac{y_{1j}}{n_{1j} - y_{1j}}) - log \ (\frac{y_{0j}}{n_{0j} - y_{0j}}) $$
+This method allows for easy interpretation, especially in studies concerning medical trials (@lipsitz1991generalized). Additionally, the logarithmic transformation of the odds ratio allows to obtain approximately normally distributed sample  even for small trials (@gelman2013bayesian), which is used as a common approach in hierarchical Bayesian models, which will be described further (@schmid2001using). To obtain a preliminary idea on the values of empirical logit for the studies included in the analysis, a forest plot was used.
+
+```{r forestplot, message=FALSE, warning=FALSE, echo=FALSE, fig.cap= "Forest plot for empirical logits for 15 studies and uncertainty associated to them", out.height="100%", out.width="100%", fig.align='center'}
+descrplot_df <- data.frame (study = infarct$trial, logodds = infarct$units, sd = infarct$sigma2, tot = infarct$ntot, study = infarct$trial)
+
+descrplot_df$lower_ci <-descrplot_df$logodds - 1.96 * sqrt(1/descrplot_df$tot)
+descrplot_df$upper_ci <- descrplot_df$logodds + 1.96 * sqrt(1 /descrplot_df$tot)
+descrplot_df_order <- descrplot_df[order(descrplot_df$logodd), ]
+
+plot_forest <- ggplot(descrplot_df_order, aes(x = logodds, y = study)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    geom_segment(aes(x = lower_ci, xend = upper_ci, y = study, yend = study), color = mypal [1], size = 1) +
+    geom_point(aes(x = logodds, y = study, size = tot), color = mypal [1]) +
+    geom_errorbarh(aes(xmin = lower_ci, xmax = upper_ci, y = study), height = 0.2, color = mypal [1]) +
+    xlim(c(-1.5, 1.3)) + 
+    labs(x = "Empirical logits", y = "", title = "Forest plot of empirical logits", size = "Patients") +
+    scale_size(breaks = c(50, 500, 1000, 5000), labels = c("50", "500", "1000", "5000")) +
+    theme_bw () +
+    theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+          legend.position = c(.98, .98),
+          legend.justification = c(1, 1),
+          legend.direction = "vertical",
+          legend.key.size = unit(0.1, "cm"))
+plot_forest
+```
+As evidenced by *Figure \@ref(fig:forestplot)*, the studies differ in size and in the estimate they provide. It can be observed that bigger studies have lower uncertainty associated with them, the reasons for which will be discussed further Additionally, it should be stressed that sample estimates provide that for some studies, the treatment reduces the risk of death significantly (for instance, the Yusuf study), whereas for other studies, such as Mueller or Evemy, the estimates demonstrate a harmful effect of administration of beta blockers. This observation warrants the need for further investigation of the observed effects. Analysis is conducted to determine whether there is sufficient reason to conclude on the positive net effect of administration of beta-blockers. 
+
+## Meta-analysis in frequentist and Bayesian settings
+
+Meta-analysis methodology implies aggregating results obtained in individual experiments, discerning magnitude and direction of the effects (@brockhaus2014peto). In holds that individual studies provide more moderate effects, and the differences between them are likely to be quantitative rather than qualitative (@yusuf1985beta), due to possibility of failing to obtain a statistically significant result, or even of producing contrary results because of  non-availability of enough data. Examples of obtaining contrary results can be observed in Figure 1. Hence, combining studies with different sample size provides benefit. Furthermore, meta-analysis allows to minimize possible effects of individual selection and concealment bias (@yusuf1985beta). However, for the benefits to hold, it is important to conclusively determine absence of bias in choosing the studies for meta-analysis. The process of choosing the studies for the original analysis comprehensively covered virtually the whole research field (with the possibility of several studies being overlooked), thus delivering a reliable dataset.  
+
+Meta-analysis in Bayesian framework allows to account for all sources of variability of the data. Additionally, in such framework, it is possible to incorporate external information relevant to the scientific problem, while also guaranteeing model flexibility (@schmid2001using, @johnson2010essential). This implies including several parameters which may be useful in building a model, while avoiding the problem of overfitting (@johnson2010essential). The concept of meta-analysis in Bayesian setting intrinsically implies hierarchical modelling ^[As discussed in Section [Exchangeability](#exchangeability)..
+
+## Hierarchical Bayesian modelling
+
+The framework of a Bayesian hierarchical model is built on the assumption that the observations in each group are generated from a specific distribution, wherein the mean parameter of this distribution is itself drawn from a common distribution that is shared across all groups. This concept can be expressed in formula as follows:
+\begin{equation}
+  \ \{y_{1,j}, ...,y_{n_j,j}\} \mathop{\sim}\limits^{iid} \ p(y|\phi_j)  (\#eq:within)
+\end{equation}
+where the index $i$ represents the observation, whereas the index j references the group number.
+\begin{equation}
+  \ \{\phi_1,...,\phi_m|\psi\} \mathop{\sim}\limits^{iid} \ p(\phi|\psi)  (\#eq:between)
+\end{equation}
+$$
+\psi \sim p(\psi)
+$$
+Equation \@ref(eq:within) denotes the inherent sampling variability present within each group, while equation \@ref(eq:between) characterizes the sampling variability observed between groups. The final one reveals information about a specific, yet unknown, fixed quantity through its prior distribution.
+
+The sample of observed trials can be interpreted as a sample from all the possible trials that may be obtained. Since the presence of a common population is assumed for the parameter $\theta_j$, it follows that information contributed by one group can be used to estimate the mean in the other. Hence, a significant and attractive aspect of this approach lies in its capacity to concurrently learn from each study (group), while also gaining a deeper understanding of the broader population of studies, thus pooling information across groups.
+```{r dagplot, warning=FALSE, message=FALSE, echo=FALSE, fig.cap="Structure of the hierarchical model", out.width= "20%", out.height="20%"}
+# plotted externally; chunk created to preserve cross-reference order
+dag <- plot (infarct$sigma2, infarct$units) # not meaningful
+dag
+```
+
+From *Figure \@ref(fig:dagplot)*, it appears evident that the hyperparameters only affect $y$ through $\theta$. Hence, the data y and the hyperparameters $\psi$ are conditionally independent given the model parameters $\theta$, so the likelihood satisfies (@johnson2020teaching):
+
+$$
+f(y|\phi,\psi)=f(y|\phi)
+$$
+### Exchangeability {#exchangeability}
+
+The term 'exchangeability' was introduced by de Finetti in the context of personal probability: it described a particular sense in which quantities treated as random variables in a probability specification are thought to be similar (@draper1993exchangeability).
+
+In particular, $X_1,...X_n$ are exchangeable random variables if they play a symmetrical role in relation to all problems of probability or, in other words, if the probability that $X_{i_{1}},X_{i_{2}},...,X_{i_{n}},$ satisfy a given condition is always the same, however the distinct indices $i_1,..,i_n$ are chosen (@de1937foresight). A probability distribution P for the processes is exchangeable if it's invariant under permutations:
+
+$$
+P\{X_1=e_1,...,X_n=e_n\}=P\{X_{\pi(1)}=e_1,...,X_{\pi(n)}=e_n\},
+$$ 
+Where $e_1,e_2,,,.e_n$ is any sequence of possible values, and $\pi$ is any permutation (@diaconis1988recent). Since *de Finetti's Theorem* allows to extend the results to all *n*, the main ideas of this can be summarized as follows (@hoff2009first):
+
+$$
+\begin{cases} Y_1,...,Y_n|\theta\ are\ i.i.d. \\ \theta\sim p(\theta) \end{cases} \Leftrightarrow    Y_1,...,Y_n\  are\  exchangeable\ for \ all\ n
+$$ 
+
+Hence, the presence of exchangeable studies, as observed in meta-analysis, inherently lends itself to the formulation of a two-stage Bayesian hierarchical model.  
+
+### Hierarchical Normal model
+
+As discussed before, the choice to use empirical logits implies specifying a Normal hierarchical model. Additionally, it should be stressed that the analysis is conducted using point estimates, not single observations, as data points. Thus, the model is structured as follows:
+
+$$
+y_{j} \sim N(\theta_j,\sigma^2_j),
+$$
+where the parameter $\sigma^2$ is assumed to be a known quantity  (@gelman2013bayesian). It is calculated according to the following formula:
+$$ \sigma^2_j = \frac{1}{y_{1j}} + \frac{1}{n_{1j} - y_{1j}} + \frac{1}{y_{oj}} + \frac{1}{n_{oj} - y_{oj}} $$
+Thus, a prior distribution is not incorporated for it; this is a common assumption with underlying binomial sampling distributions. Moreover, attaching a prior distribution to the $\sigma^2_j$ independently of the $\theta_j$ or the underlying binomial parameters is not appropriate because of the functional relationship between the variance and mean of the binomial. In fact, where primary interest resides in the treatment effects, independent (beta) prior distributions for the two proportions involved in each study may not be appropriate (@carlin1992meta). It is worth noting that the assumption of normally distributed observed values with known variance is likely to be reasonable in most situations, as long as the studies are large and observed counts are not too small. 
+
+The sampling distribution of the parameter $\theta$, under the assumption of exchangeability of the studies, is presented below (@gelman2013bayesian):
+$$
+\theta_1,...,\theta_J|\mu,\tau\sim \prod^J_{j=1}N(\theta_j|\mu,\tau^2)
+$$
+Hence, once the parameters $\mu$ and $\tau$ are known, the parameters are independent of the other $\theta's$, as well as independent of the data from groups other than $j$.
+
+Prior distributions to $\mu$ and $\tau$ are defined as follows:
+$$
+\mu \sim N(\mu_0,\gamma_0^2)
+$$
+$$
+\frac{1}{\tau^2} \sim Gamma(\frac{\eta_0}{2},\frac{\eta_0\tau_0^2}{2})
+$$
+
+The prior distribution applied to $\theta$ accounts for the uncertainty concerning an individual study. Conversely, the prior distributions assigned to $\mu$ and $\tau$ encompass the uncertainty surrounding the wider population of trials. The two densities are assumed to be independent. It is important to acknowledge that the full uncertainty regarding study-specific parameters is naturally propagated into the between-study model, and feedback is allowed from the between-study model to the estimation of study-specific parameters (@lunn2013fully).
+
+Consequently, the joint posterior distribution can be specified as:
+$$
+p(\theta_1,...,\theta_j,\mu,\tau^2|y_1,...,y_n) 
+$$
+$$
+\propto p(\mu,\tau^2) p(\theta_1,...,\theta_j|\mu,\tau^2)
+p(y_1,...,y_j|\theta_1,...,\theta_j,\mu,\tau^2)
+$$
+$$
+=p(\mu) p(\tau^2)\biggl\{\prod^J_{j=1}N(\theta_j|\mu,\tau^2)\biggl\}
+\biggl\{\prod^J_{j=1}p(y_j|\theta_j,\sigma^2_j)\biggl\}
+$$
+
+In particular, when we observe data from an individual study, we can directly derive conclusions about the parameter $\theta$ specific to that study. However, since $\theta$ and $\mu$ are interdependent, we can also utilize data from a single study to draw inferences about the overall population of trials. This justifies employing the data from one study to inform the inference on other studies within the population.
+
+The complicated nature of the joint?? implies that sampling from the marginal posteriors directly is not feasible, since they are not available in close form. This introduces the necessity to implement Markov Chain Monte Carlo methodology, which allows obtain samples from the posterior using full conditional distributions, at the cost of introducing a dependence in the chain: by construction, Markov Chain algorithms produce a sample in which each value only on its current state..
+<---> I wrote this but it is correct from theoretical point of view of joint vs posterior? <--->
+
+## Gibbs sampling
+
+The Gibbs Sampler algorithm is employed to iteratively draw values from the posterior distribution by sampling from the full conditionals. Fortunately, for this specific application, they can be readily recovered in a closed form^[The derivations of the full conditionals are lengthy, hence not provided in the summary, but are available upon request]. The Gibbs sampler is a technique for generating random variables from the posterior distribution indirectly, without having to calculate the density. It generates a sample from $f(x)$ by sampling instead from the conditional distributions $f(x|y)$ and $f(y|x)$, which are often known in statistical models (@casella1992explaining).
+
+It can be confidently stated that, under fairly general conditions, which will almost always hold in meta-analysis, the simulation will eventually converge to the correct posterior distribution and enable random draws from it (@gilks1995markov).
+
+# Implementation 
+
+The methodology described above was used to perform Bayesian meta-analysis. Applying hierarchical Bayesian techniques to meta-analysis allowed to synthesise the outcomes of 15 different studies, and utilise that information to obtain both study-specific effects, and the estimate for the average effect of the treatment (@johnson2010essential).
+
+## Normality assumption
+
+First, the assumption on the normality of the distribution of the data was assessed. 
+```{r normality, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.cap='In order, an histogram, a boxplot and a qq-plot are employed to assess the assumption of normality', out.height='100%', out.width='100%'}
+df <- data.frame(units = infarct$units)
+
+norm.hist=ggplot(df, aes(x = units)) +
+  geom_histogram(aes(y = ..density..),binwidth = 0.55,
+                 color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+ 
+  labs(title = 'Histogram', y='', x='')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5))
+
+
+norm.box=ggplot(df, aes(y = units)) +
+  geom_boxplot(color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+ 
+  labs(title = 'Boxplot', y='', x='')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5))
+
+
+qqplot=ggplot(df, aes(sample = units)) +
+  stat_qq(color = 'grey38', size = 1) +
+  stat_qq_line(col='lightsteelblue4', size=1)+
+  labs(title = "Normal QQ plot", y='', x='') +
+  theme_bw()+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5))
+
+norm.hist+norm.box+qqplot
+```
+
+In *Figure \@ref(fig:normality)*, three techniques to evaluate the normality of the variable *log-odds ratio* were employed. Although the points do not exhibit a perfectly normal distribution, as evident in the *Q-Q plot*, we will still rely on this assumption for making inferences. With only 15 available point estimates, any departure from normality could be interpreted as a random mechanism rather than a systematic tendency towards values significantly deviating from the quantiles of a Normal distribution.
+
+## Prior distributions specification
+
+Generally in the medical research, information available on the $\mu$ and $\tau^2$ hyperparameters is very scarce (@schmid2001using), justifying assigning diffuse, non-informative priors,such as uniform, to represent the lack of knowledge on the subject. However, in this framework, a certain amount of information is available on the nature of the parameters. For instance, literature review has been conducted, with studies on the efficacy of beta blockage analysed (@yusuf1985beta, @schmid2001using, @al2008beta). Consequently, it is possible to estimate the prior expectation of the mean at a value of 0, with a small amount of variation, $\gamma^2_0 = 4$. The between-studies variation is also expected to assume relatively small values, hence the prior hyperparameters are set at $\tau^2_0 = 4, \ \eta_0 = 2$, where $\eta_0$ may be interpreted as the prior sample size. This choices for the hyperparameters allow to preserve the differences in the variation between the studies (@schmid2001using).
+
+# Interpretation
+
+At this stage, the Gibbs sampling was implemented, and samples from posterior distributions were obtained. In the following section, the resulting chained are assessed for convergence, and posterior inference is performed. 
+
+```{r gibbs-definition, warning=FALSE, message=FALSE, echo=FALSE}
+sigmaj=infarct$sigma2
+m <- nrow (infarct)
+n.vec <- infarct$ntot # length 15
+ybar.vec <- infarct$units # length 15
+ybar.tot <- mean(ybar.vec)
+var.between <- var(ybar.vec) # of means, it's a scalar
+var.within <- mean(infarct$sigma2) # length 15
+
+mu_fcl <- function(mu0, gamma20, theta.vec, m, tau2) {
+  gamma2n <- (m/tau2 + 1/gamma20)^-1
+  mun <- gamma2n*(mu0/gamma20 + mean(theta.vec)*m/tau2)
+  draw <- rnorm(1, mean = mun, sd = sqrt(gamma2n))
+  return(draw)
+}
+
+tau2_fcl <- function(tau20, eta0, theta.vec, m, mu) {
+  etan <- eta0 + m
+  tau2n <- (eta0*tau20 + sum((theta.vec - mu)^2))/etan
+  draw <- 1/rgamma(1, shape = etan/2, rate = etan*tau2n/2)
+  return(draw)
+}
+
+theta_fcl <- function(ybar.vec,  mu, sigma2, tau2) {
+  sigma <- diag((1/sigma2 + 1/tau2)^-1)
+  mean <- (ybar.vec/sigma2 + mu/tau2)/(1/sigma2 + 1/tau2)
+  draw <- mvtnorm::rmvnorm(1, mean = mean, sigma = sigma)
+  return(draw)
+}
+
+gibbs <- function(G, burnin, thin, inits,
+                  data, ybar.vec, m, 
+                  mu0, gamma20, eta0, tau20, sigma20) {
+  n.iter <- burnin + G*thin
+  current_state <- inits
+  
+  sample <- matrix(0, nrow = G, ncol = 17)
+  
+  g <- 1
+  
+  for (i in 1:n.iter) {
+    current_state[1] <- mu_fcl(mu0, gamma20, theta.vec = current_state[3:17], m, tau2 = current_state[2])
+    current_state[2] <- tau2_fcl(tau20, eta0, theta.vec = current_state[3:17], m, mu = current_state[1])
+    current_state[3:17] <- theta_fcl(ybar.vec, mu = current_state[1], 
+                                     sigma2 = sigma20, tau2 = current_state[2])
+    
+    if ((i>burnin) & (i%%thin == 0)) {
+      sample[g,] <- current_state
+      g <- g + 1
+    }
+  }
+  
+  colnames(sample) <- c("mu", "tau2", paste("theta", 1:15, sep = ""))
+  return(sample)
+}
+
+G <- 5000; burnin <- 1000; thin <- 4
+inits <- c(ybar.tot, var.between, ybar.vec)
+mu0 <- 0; gamma20 <- 4
+tau20 <- 4; eta0 <- 2
+sigma20 = infarct$sigma2
+```
+
+```{r gibbs-saving, echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+set.seed(1)
+out <- gibbs(G, burnin, thin, inits,
+             infarct, ybar.vec, m, 
+             mu0, gamma20, eta0, tau20, sigma20)
+saveRDS (out, "gibbs.RDS")
+```
+
+```{r gibbs-out, echo=FALSE, message=FALSE, warning=FALSE}
+out <- readRDS ("gibbs.RDS")
+mu <- out [,1]
+tau2 <- out [,2]
+theta1 <- out [,3]
+theta_hats <- apply (out [, 3:17], 2, mean)
+probs <- apply (out [, 3:17], 2, function (x) mean (x < 0))
+```
+ 
+## Convergence
+
+Assessing the convergence of the chain is essential: as discussed above, the Gibbs sampling method introduces within-sequence correlation. Generally, the Markov Chain Monte Carlo chain results in independent and identically distributed draws from the posterior distributions; however, high degrees of correlation may result in decreased precision of the estimation (@gelman2013bayesian).
+
+```{r convergence, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.cap="Diagnostic tools are provided for the parameters mu,tau and theta1. For each parameter three plots are shown: histograms together with credible intervals at 95% level; Autocorrelation plots indicating the chain's mixing and convergence properties; Boxplots used to check the stationarity of the chain", out.height="100%", out.width="100%"}
+df.out=as.data.frame(out)
+colnames(df.out)=c('mu','tau',paste0('theta',1:15))
+
+g1=ggplot(df.out, aes(x = mu)) +
+  geom_histogram(aes(y = ..density..),binwidth = 0.1, color = "white", fill = "lightsteelblue2", alpha = 0.5)+ 
+  geom_density(aes(x=mu),color = "lightsteelblue4", lwd = 1.3, adjust=2) +
+  geom_errorbar(aes(y=0,xmin=quantile(mu,0.05), xmax=quantile(mu,0.95), width=0.02))+
+  labs(x = "Values", y = '', 
+       title = TeX("$Marginal\\  Posterior \\ \\mu$"))+
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+autocorr <- acf(df.out$mu, plot = FALSE)
+
+# Dataframe with lag values and autocorrelation
+df <- data.frame(Lag = autocorr$lag, Autocorrelation = autocorr$acf)
+
+a1=ggplot(df, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  xlab("Lag") +
+  ylab("") +
+  labs(title='Autocorrelation')+theme_bw()+
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, hjust = 0.5))
+
+g2=ggplot(df.out, aes(x = tau)) +
+  geom_histogram(aes(y = ..density..),binwidth = 0.2, color = "white", fill = "lightsteelblue2", alpha = 0.5)+ 
+  geom_density(aes(x=tau),color = "lightsteelblue4", lwd = 1.3, adjust=2) +
+  geom_errorbar(aes(y=0,xmin=quantile(tau,0.05), xmax=quantile(tau,0.95), width=0.02))+
+  labs(x = "Values", y = '', 
+       title = TeX("$Marginal \\  Posterior \\ \\tau$"))+
+  coord_cartesian(xlim=c(0,3.3))+
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+autocorr <- acf(df.out$tau, plot = FALSE)
+
+df <- data.frame(Lag = autocorr$lag, Autocorrelation = autocorr$acf)
+
+a2=ggplot(df, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  xlab("Lag") +
+  ylab("") +
+  labs(title='Autocorrelation')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, hjust = 0.5))
+
+g3=ggplot(df.out, aes(x = theta1)) +
+  geom_histogram(aes(y = ..density..),binwidth = 0.2, color = "white", fill = "lightsteelblue2", alpha = 0.5)+ 
+  geom_density(aes(x=theta1),color = "lightsteelblue4", lwd = 1.3, adjust=2) +
+  geom_errorbar(aes(y=0,xmin=quantile(theta1,0.05), xmax=quantile(theta1,0.95), width=0.02))+
+  labs(x = "Values", y = '', 
+       title = TeX("$Marginal \\  Posterior \\ \\theta_1$"))+
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+autocorr <- acf(df.out$theta1, plot = FALSE)
+
+df <- data.frame(Lag = autocorr$lag, Autocorrelation = autocorr$acf)
+
+a3=ggplot(df, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  xlab("Lag") +
+  ylab("") +
+  labs(title='Autocorrelation')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, hjust = 0.5))
+  
+##################################
+
+stationarity.plot <- function(x, ...) {
+  S <- length(x)
+  scan <- 1:S
+  ng <- min(round(S/100), 10)
+  group <- S * ceiling(ng * scan / S) / ng
+  
+  df <- data.frame(x = x, group = group)
+  
+  getPalette = colorRampPalette(brewer.pal(9, "PuBu"))
+  
+  ggplot(df, aes(x = as.factor(group), y = x, fill = as.factor(group))) +
+    geom_boxplot(outlier.size=0.8) +
+    xlab("iteration") +
+    scale_fill_manual(values = getPalette(10)) +  
+    guides(fill = FALSE)+
+    labs(y='')+
+    theme_bw() +
+    theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))+
+    scale_x_discrete(breaks=c(0,2500,5000))
+}
+
+box.1=stationarity.plot(out[, 1])+labs(title=TeX('$Stationarity \\ \\mu$'))
+box.2=stationarity.plot(out[, 2])+labs(title=TeX('$Stationarity \\ \\tau$'))
+box.3=stationarity.plot(out[, 3])+labs(title=TeX('$Stationarity \\ \\Theta_1$'))
+
+pl<- list(g1,a1,box.1,g2,a2,box.2,g3,a3,box.3)
+
+grid.arrange(grobs= lapply(pl, "+", theme(plot.margin=margin(4,0.2,4,0.2))), nrow=3, ncol=3)
+```
+```{r all-thetas, eval=FALSE, include=FALSE}
+color=hcl.colors(n = 17,palette = "Spectral")
+par(mfrow=c(3,5))
+for (i in 3:17){
+  hist(out[,i], br=20, main=colnames(out)[i], xlab='',
+       col=color[i])
+}
+
+par(mfrow=c(3,5))
+for (i in 3:17){
+  acf(out[,i],main=colnames(out)[i])
+}
+
+stationarity.plot_simple<-function(x,...){
+  
+  S<-length(x)
+  scan<-1:S
+  ng<-min( round(S/100),10)
+  group<-S*ceiling( ng*scan/S) /ng
+  
+  boxplot(x~group,...)               }
+
+par(mfrow=c(3,5))
+for (i in 3:17){
+  stationarity.plot_simple(out[,i],xlab="iteration",
+                           ylab='',main=colnames(out)[i], col=color[i])
+}
+
+```
+
+In *Figure \@ref(fig:convergence)*, it is evident that all three considered parameters have achieved convergence^[Only one $\theta$ parameter is demonstrated for visual representation. However, all parameters have been investigated and convergence confirmed] . The boxplots illustrate the stationarity of the chains, while the autocorrelation plots assure that there are no concerns regarding dependence within the chain. These results were obtained by thinning the chain at intervals of four values. Additionally, we can examine the posterior distribution of the parameters through histograms. It is worth noting that both $\mu$ and $\theta_1$ exhibit distributions resembling a normal distribution. Conversely, $\tau$ displays a right-skewed density line, indicating a high likelihood for the parameter to assume smaller values.
+
+Effective sample size is a measure of the degree of autocorrelation in the chain: 
+$$ ESS = \frac{G}{1+2\sum_{g=1}^{G}{acf_g}} $$
+If there is autocorrelation in the chain, the effective sample size will be reduced compared to G, the size of the chain after the burn-in period.
+```{r ess, echo=FALSE, fig.align='center'}
+ess=sapply(1:17, function(x) effectiveSize(mcmc(out[,x])) ) 
+df.ess=as.data.frame(t(ess))
+colnames(df.ess)=c('mu','tau', paste('theta',1:15))
+df.ess.first=df.ess[1,1:9]
+df.ess.second=df.ess[1,10:17]
+knitr:: kable(df.ess.first, booktabs=T,
+      caption = "Effective sample size", digits = 3 )  %>%
+  row_spec(1, background = 'lemon')
+knitr:: kable(df.ess.second, booktabs=T, digits = 3 )  %>%
+  row_spec(1, background = 'lemon')
+```
+
+In *Table \@ref(tab:ess)* we can observe the results of the effective sample size, which indicate favorable outcomes. This suggests that the algorithm is performing well, demonstrating its efficacy in capturing the underlying data patterns.
+```{r mcse, warning=FALSE, message=FALSE, echo=FALSE}
+MCSE <-  apply(out,2,sd)/sqrt(effectiveSize(out))
+```
+To estimate the Monte Carlo errors associated to the obtained chains, the following formula was used (@lapdem):
+$$ MCSE = \frac{\sigma (x)}{ESS (x)}, $$
+which allows to account for dependence in the chains. The errors associated with the chain for the posterior distributions of  $\mu$ $\tau^2$ are 0.005 and 0.007 respectively, and the Monte Carlo standard errors for the Bayesian effects range from 0.002 to 0.012. 
+ 
+## Interpretation
+To perform posterior inference, the samples drawn from the posterior distributions for the mean and variance parameters, as well as fifteen chains for the $\theta$ parameters. The obtained distributions allow to compute Monte Carlo approximations for estimates for the $\theta$ effects.
+<---> Externally designed table with output <--->
+```{r inf-thetas, warning=FALSE, message=FALSE, echo=FALSE}
+# designed externally; chunk created to preserve cross-reference order
+tab1 <- data.frame (study = infarct$trial [1], unit = infarct$units [1]) # not meaningful
+flextable (tab1)
+```
+*Table \@ref(tab:inf-thetas)* describes quantities related to the analysis. The estimates for the mean of empirical logits for each study, are discussed in detail below. The probabilities reported indicate how likely a Bayesian effect is to report reduction in odds of dying. For instance, the Yusuf study reports 97% posterior probability that the treatment reduces the chance of dying. However, for many studies, the probability is around 50%, providing indication of play by chance.
+
+describes the number of deaths and the total number of patients in treatment and control groups for each study; the logarithm of the ratio of odds of death in treatment and control groups and variances for them;  Monte Carlo approximations for Bayesian posterior between-study estimates for effects and their variances; finally, probabilities of $\theta_j <0$ are recorded. The estimates for the mean of empirical logits for each study, are discussed in detail [below](#shrinkage). Note that studies with less precision are characterised by distributions with longer tails (@gelman2013bayesian). Comparison in the distribution of a less precise study with a more precise one is demonstrated in *Figure \@ref(fig:tails)*. 
+```{r tails, echo =FALSE, warning=FALSE, message=FALSE, fig.cap="Densities for Lloyd and MIAMI studies", fig.align='center', out.height="80%", out.width="80%"}
+df_tails <- data.frame(Evemy = out[, 4], Mueller = out[, 6])
+melted_df <- df_tails %>% pivot_longer(everything(), names_to = "Variable", values_to = "Value")
+
+plot_tails <- ggplot(melted_df, aes(x = Value, fill = Variable)) +
+    geom_density(alpha = 0.3, adjust = 2) +
+    labs(x = "Estimated effect", y = "Density") +
+    ggtitle ("Posterior distribution for the effects of Evemy and Mueller")+
+    scale_fill_manual(values = c("Evemy" = mypal [2], "Mueller" = mypal [9])) +
+    guides(fill = guide_legend(title = "Variables")) +
+    theme_bw () +
+    theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+plot_tails
+```
+
+```{r hdi, echo=FALSE, warning=FALSE, message=FALSE}
+hdi_mu <- hdi (mu)
+hdi_tau <- hdi (tau2)
+sd_between <- sqrt (tau2)
+med <- median (sd_between)
+```
+Furthermore, conclusions may be made on the values for posterior estimates of the prior parameters. The posterior approximation to the estimate of the mean is -0.13, which is the overall mean value for the estimator for all the studies included in the analysis (@gelman2013bayesian). The 95% highest posterior density credible interval is [-0.71, 0.50] on the log scale, which also covers positive values of the empirical logit. With regard to the estimate of the between-study variance, the highest posterior density 95% credible interval is [0.38, 2.02]. The median value for $\tau$ is 0.97, which, compared to the values of variance in Table 2 provides some evidence of shrinkage in studies with low precision (@gelman2013bayesian). This fact is further investigated below. 
+
+## Shrinkage {#shrinkage}
+
+As discussed previously, one of the main benefits on hierarchical Bayesian modelling lies in the fact that the posterior estimates for each group borrow the strengths from the information of all the other groups. This implies that the studies that carry the most weight in the meta-analysis would influence the estimates for studies which weigh less more significantly. In this framework, the weights are defined by the precision of the sample estimates: the less variance is associated to the estimate of a group, the more reliable is the information it can convey to the estimates of the other groups, hence their values will tend to shrink to it. 
+```{r plot-shrinkage, warning=FALSE, message=FALSE, echo=FALSE, fig.align='center', out.height="100%", out.width="100%", fig.cap="Shrinkage in the posterior estimates"}
+plot_shrink1 <- ggplot(infarct, aes(units, theta_hats)) +
+    geom_point(size = 2, col = mypal [1], pch = 16) +
+    geom_abline(intercept = 0, slope = 1, color = "black", size = 1) +
+    labs(x = TeX ("$\\y_{j}$"), y = TeX ("$\\theta_{j}$")) +
+             theme_bw ()
+
+varsorted_df <- data.frame (thetas = theta_hats, ys = ybar.vec, sigmas = infarct$sigma2)
+varsorted_df <- varsorted_df %>%
+  arrange(sigmas)
+
+plot_shrink2 <- ggplot(data = varsorted_df, aes (x = sigmas, y = (ys - thetas))) +
+    geom_point(aes(x = sigmas, y = (ys - thetas)), size = 2, shape = 16) +
+    geom_hline(yintercept = 0, color = "black", size = 1) +
+    labs(x = "variance", y = TeX ("$\\y_{j} - \\theta_{j}$")) +
+    theme_bw ()
+
+plot_shrink3 <- ggplot(varsorted_df) +
+    geom_hline(yintercept = c(2.5, 0.5), linetype = "dashed") +
+    geom_segment(aes(x = thetas, xend = ys, y = 0.5, yend = 2.5), color = mypal[2]) +
+    geom_point(aes(x = thetas, y = 0.5, color = "Bayesian effects"), size = 2) +
+    geom_point(aes(x = ys, y = 2.5, color = "Empirical logits"), size = 2) +
+    geom_line(aes(x = thetas, y = 0.5, group = 1), color = mypal[3]) +
+    geom_line(aes(x = ys, y = 2.5, group = 1), color = mypal[1]) +
+    ylim(0.4, 3.55) +
+    xlab("Values") +
+    ylab("") +
+    labs(color = "") +  
+    scale_color_manual(values = c("Bayesian effects" = mypal[3], "Empirical logits" = mypal[1])) + 
+    theme_bw() +
+    theme(
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        legend.position = c(.95, .97),
+        legend.justification = c(1, 1),
+        legend.direction = "horizontal")
+
+plot_shrink <-(plot_shrink1 + plot_shrink2 + plot_shrink3) + plot_annotation(title = "Shrinkage plots", theme = theme(plot.title = element_text(face = "bold", hjust = 0.5)))
+plot_shrink
+```
+
+*Figure \@ref(fig:plot-shrinkage)* provides evidence that there is considerable shrinkage in the posterior estimates. Firstly, it should be underlined that, for groups with the lowest sample estimates, the Bayesian estimates of the effects tend to be higher ($\widehat {\theta_j} > \bar{y_j}$), and the opposite holds for high sample estimates. This demonstrates that, if extreme values of the empirical logits are observed, the Bayesian estimates of the effects for those studies tend to shrink to the average. Additionally, it can be observed that, for groups with higher variance, the sample estimates have a higher magnitude of difference from the posterior estimates, whereas for groups with higher precision, the difference is lower. This demonstrates improvement in terms of the general claim in favour of meta-analysis, indicated by @yusuf1985beta: for studies that do not have enough participants (in this framework, the number of patients in the groups directly influences the variance), their estimates are not sufficiently stable and reliable. Hence, the Bayesian framework helps address that problem by allowing less precise studies to "borrow" information from the other trials, improving the estimated. Furthermore, it may be underlined that studies that provide positive values for empirical logits, which is contrary to the original hypothesis, demonstrate highest degrees of shrinkage. 
+
+It is beneficial to investigate a particular example, namely two studies which demonstrated different degrees of shrinkage. 
+```{r plot-shrinkage2, message=FALSE, warning=FALSE, echo=FALSE, fig.align='center', out.width="100%", out.height="100%", fig.cap="Comparison of posterior distributions and the sample estimates for studies of Norris and von Essen, with sample confidence intervals below the plot"}
+color_values <- c(mypal[2], mypal[10])
+labels <- c("Norris", "von Essen")
+
+plot_6vs10 <- ggplot() +
+    scale_color_manual(values = c (mypal [4], mypal [8], "black"), labels = c ("Norris", "von Essen", "Population mean")) +
+    geom_segment(aes(x = mean(mu), xend = mean(mu), y = 0, yend = 0.96, color = "black"),  lwd = 1.1) +
+    stat_density(aes(out[, 8]), color = mypal [10], fill = mypal [10], adjust = 2, alpha = 0.07, lwd = 1.1) +
+    stat_density(aes(out[, 12]), color = mypal [2], fill = mypal [2], adjust = 2, alpha = 0.07, lwd = 1.1) +
+    #geom_hline (yintercept = 0, lwd = .8, color = 1) +
+    geom_errorbarh(aes(xmin = descrplot_df[6, 6], xmax = descrplot_df[6, 7], y = -0.06, color = mypal [8]), height = 0.03, size = 1) +
+    geom_errorbarh(aes(xmin = descrplot_df[10, 6], xmax = descrplot_df[10, 7], y = -0.11, color = mypal [4]), height = 0.03, size = 1) +
+    geom_point(aes(infarct[6, 9], -0.06), color = mypal [4],  size = 3, shape = 18) +
+    geom_point(aes(infarct[10, 9], -0.11), color = mypal [8], size = 3, shape = 18) +
+    labs(x = "estimates", y = "Relative frequency") +
+    coord_cartesian(xlim = c(-2.2, 2.2), ylim = c(-0.11, 1.01)) +
+    guides (color = guide_legend(title = NULL), 
+            fill = guide_legend(title = NULL)) +
+    ggtitle("Posterior distribution for Norris and von Essen studies' parameters")  +
+    theme_bw() +
+    theme(
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        legend.position = c(.95, .95),
+        legend.justification = c(1, 1),
+        legend.direction = "vertical")
+plot_6vs10
+```
+*Figure \@ref(fig:plot-shrinkage2)* compares two studies: von Essen and Norris. For the former, a smaller number of patients participated in the trial, hence the precision associated to the estimate was higher, as demonstrated by the confidence interval below the plot. By contrast, the sample estimate for the Norris study had less uncertainty associated with it (however, it was not the most precise study in the dataset). As demonstrated by the plot, the initial sample estimates were quite close to each other. However, after hierarchical Bayesian estimation, the posterior density for the less precise von Esssen study shrunk to the posterior overall mean, since it borrowed strength from more precise studies. On the other hand, the Bayesian estimate for the Norris study did not borrow much information from the population mean posterior estimate for it had a low degree of uncertainty associated to it. 
+
+### Conditional posterior expected value
+
+Shrinkage is also evident when analysing the values for the conditional posterior expected value, which depends not only on it's sample average, but also on the overall population mean (@hoff2009first, p. 140). 
+$$
+\mathbb{E}(\theta_j|OR_j,\mu,\tau)=\frac{y_j/\sigma^2_j+\mu/\tau^2}{1/\sigma^2_j+1/\tau^2}
+$$
+
+```{r posterior-mean, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.cap='The 15 lines depict the conditional posterior means for each parameter, with varying values for the parameter tau.', out.height='100%', out.width='100%'}
+mn= function(mu,tau2,units,sigma){
+  
+  mn.num=mu/tau2+units/sigma
+  mn.den=1/tau2+1/sigma
+  
+  return(mn.num/mn.den)
+}
+
+mu=out[,1]
+max.mu=max(mu) # posterior mode 
+
+tau.values=seq(0.0001,50,0.01)
+mn.values= sapply(tau.values, function(x) 
+  mn(mu=max.mu,tau2=x, infarct$units, infarct$sigma2))
+
+trial.sort= infarct %>% 
+  select(trial,ntot) %>%
+  arrange(desc(ntot))
+
+df_condmeans <- as.data.frame(t(mn.values)) %>%
+  setNames(paste(LETTERS[1:15], trial.sort$trial, sep=': ')) %>%
+  cbind(x = tau.values) 
+
+df_condmeans=df_condmeans %>% 
+  pivot_longer(cols = !x, names_to = "trial", values_to = "p")
+
+colourCount = nrow(infarct)
+getPalette = colorRampPalette(brewer.pal(9, "Reds"))
+
+title2 <- TeX('Conditional means E\\[$\\theta_j | \\tau , \\mu, y $\\]')
+ggplot(data = df_condmeans) +
+  geom_line(aes(x = x, y = p, group = trial, color=trial), size=1) +
+  labs(x = expression(tau), y = TeX('E\\[$\\theta_j | \\tau ,\\mu, y $\\]'), 
+       title = title2, color = '') +
+  scale_color_manual(values = rev(getPalette(colourCount)))+
+  guides(fill=guide_legend(nrow=2))+
+  theme_bw()+
+  coord_cartesian(xlim=c(0,10))+
+  theme(legend.background = element_blank(), legend.position = 'bottom')
+
+prob_tau.0=mn(mu=max.mu,tau2=0.000000000000000001, units, sigmaj)
+# 1.05071
+
+```
+The conditional posterior means $\mathbb{E}(\theta_j|OR_j,\mu,\tau)$ are displayed as a function of $\tau$  in *Figure \@ref(fig:posterior-mean)*. A study’s posterior mean can be interpreted as a compromise between its observed treatment effect and the average treatment effect.
+As $\tau$ becomes larger, corresponding to more variability among studies, the estimates become more like the raw ones. Hence, as $\tau$ increases, the population distribution allows the eight effects to be more different from each other, and thus the posterior uncertainty in each individual $\theta_j$ increases, approaching the original standard deviations in the limit of $\tau \rightarrow \infty$ (@gelman2013bayesian).
+
+At $\tau=0$, the inference is that all experiments have the same size effect, specifically 1.05 points.
+
+## Sensitivity analysis
+
+Although the diagnostics performed on the posterior Bayesian distributions above provided satisfactory results, there is a possibility that there exist specifications that would provide a good fit, but lead to slightly different conclusions (@gelman2013bayesian). One of those possibilities arises from the choice of the prior parameter specifications: inappropriate choices for priors may result in incorrect estimation of uncertainty (@roos2015sensitivity). To control how the choice of the prior parameters may affect the posterior information, sensitivity analysis was conducted (@hoff2009first). 
+```{r sens-probs, warning=FALSE, message=FALSE, echo=FALSE, eval=FALSE}
+mu_sens <-c (-1, -.5, 0, .5, 1); gamma_sens <- c (1, 2, 4, 7, 10)
+par.grid <- expand.grid (mu_sens, gamma_sens)
+set.seed (1)
+sens_out.m <- sapply(1:nrow(par.grid), function(x) {
+  gibbs (G, burnin, thin, inits, infarct, ybar.vec, m, par.grid [x, 1], 
+         par.grid [x, 2], eta0, tau20, sigma20) [, 1]
+})
+saveRDS (sens_out.m, "sens_mugamma.RDS")
+
+tau_sens <- c(1, 1.5, 2, 2.5, 4, 5, 7); eta_sens <- 1:7
+par.grid <- expand.grid (tau_sens, eta_sens)
+set.seed (1)
+sens_out.t <- sapply(1:nrow(par.grid), function(x) {
+  gibbs (G, burnin, thin, inits, infarct, ybar.vec, m, mu0, gamma20, par.grid [x, 2], 
+         par.grid [x, 1], sigma20) [, 1]
+})
+saveRDS (sens_out.t, "sens_taueta.RDS")
+```
+```{r sensprob-plot, warning=FALSE, message=FALSE, echo=FALSE, fig.align='center', out.height="100%", out.width="100%", fig.cap="Sensitivity analysis for the probability of the grand mean being less than zero for different prior specifications"}
+sens_out.m <- readRDS ("sens_mugamma.RDS")
+mu_sens <-c (-1, -.5, 0, .5, 1); gamma_sens <- c (1, 2, 4, 7, 10)
+par.grid.m <- expand.grid (mu_sens, gamma_sens)
+par.grid.m$prob <- apply (sens_out.m, 2, function (x) mean (x < 0))
+plot_sens.m <- ggplot(data=par.grid.m, aes(factor(par.grid.m$Var1), factor(par.grid.m$Var2), fill= par.grid.m$prob)) + 
+    geom_tile(color = "white",
+              lwd = 1,
+              linetype = 1) +
+    geom_text(aes(label = round(prob,3)), color = "white", size = 2.5)+
+    scale_fill_gradient(low='sandybrown', high='firebrick4')+
+    scale_x_discrete(name = TeX("$\\mu_0$"), expand = c(0, 0))+
+    scale_y_discrete(name = TeX("$\\gamma^2_0$"), expand = c(0, 0))+
+    guides(fill = guide_colourbar (title = "prob", format = "%0.2f")) + 
+    theme(legend.position = "bottom", 
+                 legend.direction = "horizontal",
+          legend.key.width = unit (.7, "cm"),
+          legend.key.height = unit(.3, "cm")) # +
+    #ggtitle('Sensitivity analysis for probabilities')+
+    #theme(plot.title = element_text(size = 17, face = "bold",hjust = 0.5),
+     #     axis.title.y=element_text(angle=0, vjust=0.6))
+
+sens_out.t <- readRDS ("sens_taueta.RDS")
+tau_sens <- c(1,1.5, 2,2.5, 3,5,7); eta_sens <- 1:7
+par.grid.t <- expand.grid (tau_sens, eta_sens)
+par.grid.t$prob <- apply (sens_out.t, 2, function (x) mean (x < 0))
+plot_sens.t <- ggplot(data=par.grid.t, aes(factor(par.grid.t$Var2), factor(par.grid.t$Var1), fill= par.grid.t$prob)) + 
+    geom_tile(color = "white",
+              lwd = 1,
+              linetype = 1) +
+    geom_text(aes(label = round(prob,3)), color = "white", size = 2.5)+
+    scale_fill_gradient(low='sandybrown', high='firebrick4')+
+    scale_x_discrete(name = TeX("$\\eta_0$"), expand = c(0, 0))+
+    scale_y_discrete(name = TeX("$\\tau^2_0$"), expand = c(0, 0))+
+    guides(fill = guide_colourbar (title = "prob", format = "%0.2f")) + 
+    theme(legend.position = "bottom", 
+                 legend.direction = "horizontal",
+          legend.key.width = unit (.7, "cm"),
+          legend.key.height = unit(.3, "cm"),
+          legend.justification = "center") # +
+    #ggtitle('Sensitivity analysis for probabilities')+
+    #theme(plot.title = element_text(size = 17, face = "bold",hjust = 0.5),
+     #     axis.title.y=element_text(angle=0, vjust=0.6))
+plot_sens <-(plot_sens.m + plot_sens.t)  + plot_annotation(title = "Sensitivity analysis for probabilities", theme = theme(plot.title = element_text(face = "bold", hjust = 0.5)))
+plot_sens
+```
+From *Figure \@ref(fig:sensprob-plot)* it can be concluded that the probability of observing a net positive treatment effect is not very sensitive to changes in prior specifications, for either the parameter $\mu$ or the parameter $\tau^2$. 
+
+### Within and between variability
+
+The ratio $\frac{\tau}{\tau+\sigma}$ is calculated to compare the two sources of variation. It can be interpreted as the proportion of total variability in the fifteen studies that can be attributed to differences between groups. If the value of the ratio exceeds 0.5, it indicates that the majority of the total variability is associated to between-group variability. This ratio provides valuable insights into the extent of shrinkage, which is determined by the estimate of between-study variability, $\tau$, in relation to the within-study variances. Notably, greater shrinkage occurs when $\tau$ is smaller.
+
+In our analysis, the prior density assigns a higher probability (0.9942) to the ratio being greater than 0.5. This is because a dispersed prior hyperparameter is assigned to $\tau^2$, reflecting the significant uncertainty associated with $\theta_j$. However, the posterior probability drops significantly to 0.669, indicating that the updated belief, considering the observed data, is less inclined towards the ratio being greater than 0.5.
+
+```{r variance-ratio, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.cap='Two lines representing prior and posterior density of the variance-ratio are presented. The vertical dashed lines corresponds to 0.5 points.', out.height='80%', out.width='80%', include=FALSE}
+var.within <- mean(infarct$sigma2)
+tau=out[,2]
+R.post=tau/(var.within+tau)
+
+prior=data.frame(mu.prior=rnorm(5000, mu0, sqrt(gamma20)),
+                          tau2.prior=1/rgamma(5000, shape = eta0/2, rate = eta0*tau20/2))
+
+R.prior <- prior$tau2.prior/(var.within + prior$tau2.prior)
+
+R.df <- data.frame(distr = rep(c("prior", "posterior"), each = G),
+                   value = c(R.prior, R.post))
+
+prior.df=as.data.frame(R.prior)
+post.df=as.data.frame(R.post)
+df=cbind(prior.df,post.df)
+prior_density=density(df$R.prior)
+post_density=density(df$R.post)
+
+y.axis <- TeX('$\\frac{\\tau}{\\tau + \\sigma} $')
+ggplot(df) + 
+  geom_density(aes(x=R.prior, col='Prior'),
+               alpha = 0.1, size=1, adjust=2) + 
+  geom_ribbon(data = data.frame(x = prior_density$x, y = prior_density$y),
+              aes(x = x, ymin = 0, ymax = y), fill = "lightskyblue3", alpha = 0.2) +
+  geom_density(aes(x=R.post, col='Posterior'), adjust=2,
+               alpha = 0.1, size=1) +
+  geom_ribbon(data = data.frame(x = post_density$x, y = post_density$y),
+              aes(x = x, ymin = 0, ymax = y), fill = "salmon", alpha = 0.2) +
+  geom_vline(xintercept=0.5, linetype='dashed')+
+  coord_cartesian(xlim=c(0.2,1))+
+  theme_bw()+
+  labs(x = 'values', y = y.axis, title = 'Variance comparison', color = '') +
+  theme(legend.position = 'bottom')+
+  scale_color_manual(name='Density',
+                     breaks=c('Prior', 'Posterior'),
+                     values=c('Prior'='blue', 'Posterior'='red'))+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+        legend.background = element_blank(), legend.position = 'bottom',
+        axis.title.y=element_text(angle=0, vjust=0.6))
+
+quantInv <- function(distr, value) ecdf(distr)(value)
+# reference https://stackoverflow.com/questions/9123800/how-do-i-calculate-the-probability-for-a-given-quantile-in-r
+
+prob.prior=1-quantInv(R.prior, 0.5)  # 0.9942
+prob.post=1-quantInv(R.post, 0.5)   # 0.669
+
+```
+
+In *Figure \@ref(fig:sensitivity-ratio)* we can notice that the probability associated with the posterior of the ratio $\frac{\tau}{\tau+\sigma}$ being greater than 0.5 highly depends on the prior assigned to $\tau_0$ and $\eta_0$.
+
+```{r quant-inv, echo=FALSE, eval=FALSE}
+mu0 <- 0; gamma20 <- 4
+tau20 <- c(1,1.5, 2,2.5, 3,5,7); eta0 <- 1:7
+sigma20 = infarct$sigma2; 
+
+priors=expand.grid(eta0,tau20)
+colnames(priors)=c('eta0', 'tau20')
+
+priors=priors %>% 
+  mutate(mu0=mu0) %>% 
+  mutate(gamma20=gamma20) 
+
+
+sens.out=mapply(function(mu0, gamma20, tau20, eta0) {
+  
+  out=gibbs(G, burnin, thin, inits,
+            infarct, ybar.vec, m, 
+            mu0, gamma20, eta0, tau20, sigma20)
+  
+}, priors$mu0, priors$gamma20, priors$tau20, priors$eta0)
+
+tau=sapply(1:nrow(priors), function(x) sens.out[5001:10000,x])
+
+tau.prior=1/rgamma(5000, shape = eta0/2, rate = eta0*tau20/2)
+
+R.post=sapply(1:nrow(priors), function(x) tau[,x]/(var.within+tau[,x]))
+R.prior <- tau.prior/(var.within + tau.prior)
+
+probs=sapply(1:nrow(priors), function(x) 1-quantInv(R.post[,x], 0.5))
+
+post.ratio=expand.grid(eta0,tau20) %>% 
+  mutate(probs=probs) 
+colnames (post.ratio) <- c ("eta0", "tau20", "probs")
+
+saveRDS(post.ratio,'post_ratio_new.RDS')
+```
+```{r post-ratio, include=FALSE}
+post.ratio=readRDS('post_ratio_new.RDS')
+```
+```{r sensitivity-ratio,  echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.cap='Sensitivity analysis on the prior parameters eta0 and tau20 illustrating the probability of the ratio exceeding 0.5 points.', out.height='65%', out.width='65%'}
+ggplot(data=post.ratio, aes(factor(eta0), factor(tau20), fill= probs)) + 
+  geom_tile(color = "white",
+            lwd = 1,
+            linetype = 1) +
+  geom_text(aes(label = round(probs,3)), color = "white", size = 4.5)+
+  scale_fill_gradient(low='sandybrown', high='firebrick4')+
+  scale_x_discrete(name = TeX("$\\eta_0$"), expand = c(0, 0))+
+  scale_y_discrete(name = TeX("$\\tau^2_0$"), expand = c(0, 0))+
+  guides(fill = guide_colourbar(barwidth = 0.5,
+                                barheight = 10,
+                                title = "Prob"))+
+  ggtitle('Sensitivity analysis for variance comparison')+
+  theme(plot.title = element_text(size = 17, face = "bold",hjust = 0.5),
+        axis.title.y=element_text(angle=0, vjust=0.6))
+
+```
+## Pooled and separate model
+
+Instead of using a hierarchical model two different approaches can be followed. If the prior distributions of the individual parameters for the studies are assumed to be independent, fifteen separate Bayesian models should be fitted. As a consequence, the inference about one particular study will be independent of the inferences on the remaining studies (@albert2019probability). 
+
+On the other hand, if all the studies are assumed to come from the same population, it is possible to fit one single model which ignores any differences between the fifteen trials. Hence, results from all studies are aggregated to perform one single analysis. In mathematical terms complete pooling makes the assumption that the parameter $\tau$ is exactly zero (@gelman2013bayesian); thus, any variability between studies is entirely eliminated. In this kind of analysis $\theta_j$ parameters are assumed equal because each study estimates the same common treatment effect. This approach, however, ignores information that may be gained from between-study heterogeneity (@schmid2001using).
+ 
+On the other side, when employing a hierarchical model, each study is assumed to have its own treatment effect $\theta_j$ differing from the effects of other studies. These effects are connected by a common distribution that represents how they stand in relation to the universe of all possible study effects. Furthermore, avoiding fully separate models helps mitigate the risk of overfitting. This is because information about each study is derived from multiple sources, leading to a more comprehensive and robust understanding of the data. It is important to note that if the between-study variation is assumed to be zero, or if it is estimated solely based on the maximum likelihood value of the effect variance, the posterior variance may be underestimated.
+
+```{r separate-pooled, echo=FALSE, fig.align='center', fig.cap='The first plot displays 15 lines representing the posterior density, each corresponding to a separate model. Additionally, the red line represents the posterior density of a pooled model. In the second plot, the posterior density is presented under a hierarchical setting.', fig.height=5, fig.width=9, warning=FALSE, message=FALSE}
+
+x <- seq(-4, 8, length.out = 10000)
+tau20 = 5
+
+data=data.frame(estimate=infarct$units, 
+                sigma=sqrt(infarct$sigma2),
+                v=rep(sqrt(tau20),15))
+
+normal.sep.g <- mapply(function(estimate, sigma, v, x) {
+  vn <- (1 / sigma^2 + 1 / v^2)^(-1 / 2)
+  mn <- (m / v^2 + estimate / sigma^2) * vn^2
+  dnorm(x,mn,vn)
+}, data$estimate, data$sigma, data$v, MoreArgs = list(x = x)) %>% 
+  as.data.frame() %>%  cbind(x) %>% 
+  pivot_longer(cols = !x, names_to = "ind", values_to = "p")
+
+# POOLED
+
+sigma.p=weighted.mean(sqrt(infarct$sigma2), infarct$ntot)
+estimate.p=weighted.mean(infarct$units, infarct$ntot)
+ 
+v=sqrt(tau20)
+ 
+vn.p <- (1 / sigma.p^2 + 1 / v^2)^(-1 / 2)
+mn.p <- (m / v^2 + estimate.p / sigma.p^2) * vn.p^2
+
+df_pool <- data.frame(x = x, p = dnorm(x, mn.p, vn.p))
+
+# PLOT
+
+g1=ggplot(data = normal.sep.g) +
+  geom_line(aes(x = x, y = p, group = ind, col='Separate'), size=1) +
+  geom_line(data=df_pool, aes(x = x, y = p, col='Pooled'), size=1) +
+  labs(x = expression(theta), y = '', title = 'Separate and Pooled model', color = '') +
+  theme_bw()+
+  scale_color_manual(name='Method',
+                     breaks=c('Separate', 'Pooled'),
+                     values=c('Separate'='blue', 'Pooled'='red'))+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+    legend.background = element_blank(), legend.position = 'bottom')
+
+theta.out=out[,3:17]
+theta.melt=reshape::melt(theta.out)
+
+g2=ggplot(data = theta.melt) +
+  geom_density(aes(x = value, group = X2), col='navyblue', size=1, adjust=2) +
+  geom_segment(x=2, xend=8,y=0,yend=0, col='navyblue', size=1)+
+  labs(x = expression(theta), y = '', title = 'Hierarchical model', color = '') +
+  coord_cartesian(xlim=c(-4,8))+
+  theme_bw()+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+    legend.background = element_blank(), legend.position = 'none')
+
+g1/g2
+```
+
+In *Figure \@ref(fig:separate-pooled)* we can notice that employing a hierarchical model leads to a higher degree of similarity in terms of posterior density with respect to the complete separate model^[reference for the code https://github.com/avehtari/BDA_R_demos]. 
+
+To understand the underlying reasons behind shrinkage, intuitively, if we can assume that certain studies are estimating the same thing or are exchangeable in statistical terminology, then we can gain more information about each one by using information from the others (@draper1993exchangeability).
+
+### Credible intervals
+
+As depicted in *Figure \@ref(fig:intervals)*, the presence of shrinkage effect becomes evident as the credible intervals associated with the hierarchical model appear more tightly concentrated around the pooled estimate. Although not explicitly visible in the plot due to the utilization of different units of measurement on the y-axis, employing the hierarchical model results in a reduced posterior variance when estimating posterior parameters.
+
+Through the utilization of the pooled estimate, we gain more certainty about the true effect in each study by leveraging information from other studies.
+
+Moreover, the notable level of homogeneity among the studies is evident in the substantial reductions in posterior variance when transitioning from the study-specific estimates to the Bayesian estimates. This reduction is facilitated by the borrowing of strength and information from each study, resulting in more precise and consolidated estimates.
+
+```{r intervals, echo=FALSE, fig.align='center', fig.cap='Comparison of credible intervals between pooled and separate model settings, revealing notable shrinkage effects.', fig.height=4.5, fig.width=8.5}
+normal.sep <- mapply(function(estimate, sigma, v) {
+  vn <- (1 / sigma^2 + 1 / v^2)^(-1 / 2)
+  mn <- (m / v^2 + estimate / sigma^2) * vn^2
+  c(mn, vn)
+}, data$estimate, data$sigma, data$v)
+
+normal.sep=t(normal.sep)
+
+conf.sep=mapply(function(mn,vn) {
+  q10=qnorm(0.1,mn,vn)
+  q50=qnorm(0.5,mn,vn)
+  q90=qnorm(0.9,mn,vn)
+  c(q10,q50,q90)
+}, normal.sep[,1], normal.sep[,2] )
+
+conf.sep=as.data.frame(t(conf.sep))
+colnames(conf.sep)=c('q10','q50','q90')
+
+conf.hier=apply(theta.out,2, function(x) {
+  quantile(x,probs=c(0.1,0.5,0.9))
+})
+
+conf.hier=as.data.frame(t(conf.hier))
+colnames(conf.hier)=c('q10','q50','q90')
+pool.mean=mn.p
+
+plot_sep_int <- conf.sep %>%
+  ggplot(aes(x=1:15,y=q50,ymin=q10,ymax=q90)) +
+  geom_pointrange(color="blue", alpha=0.3, linewidth=1.2, size=0.6) +
+  geom_hline(yintercept=pool.mean, linetype="dashed")+
+  labs(x="study number", y="Probability", title="Separate model")+
+  theme_bw()+
+  annotate("text", x=0, y=pool.mean, label = "Pooled mean",
+           vjust=-0.2, hjust=0.3)+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5))
+
+
+plot_hier_int <- conf.hier %>%
+  ggplot(aes(x=1:15,y=q50,ymin=q10,ymax=q90)) +
+  geom_pointrange(color="blue", alpha=0.3, linewidth=1.2,size=0.6) +
+  geom_hline(yintercept=pool.mean, linetype="dashed")+
+  labs(x="study number", y="Probability", title="Hierarchical model")+
+  theme_bw()+
+  annotate("text", x=0, y=pool.mean, label = "Pooled mean",
+           vjust=-0.2, hjust=0.3)+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5))
+
+
+plot_sep_int/plot_hier_int
+```
+
+
+## Ranking
+
+```{r ranking, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.cap='The probability of each study ranking is depected. Darker colours represents a higher likelihood for the treatment to lead to a decrease in the number of deaths.', out.height='90%', out.width='90%'}
+theta.rank=t(apply(theta.out, 1, rank)) # 5000 x 15
+res=matrix(NA, 15,15)
+
+for (i in 1:15){
+res[,i]=sapply(1:15, function(x) mean(theta.rank[,i]==x))
+}
+
+colnames(res)=infarct$trial
+res.melt=reshape::melt(res)
+
+colourCount = length(unique(res.melt$X1))
+getPalette = colorRampPalette(brewer.pal(9, "Reds"))
+
+ggplot(data=res.melt, aes(x=value, y=factor(X2), fill=factor(X1))) +
+  scale_fill_manual(values = rev(getPalette(colourCount)))+
+  guides(fill=guide_legend(title="Ranking", nrow=2))+
+  geom_bar(stat="identity")+
+  theme_minimal()+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 30, vjust = 1.2, hjust=1, size=13),
+        plot.title = element_text(size = 22, face = "bold", hjust = 0.5),
+        legend.background = element_blank(), legend.position = 'bottom',
+        axis.title.x = element_text(size=15),
+        axis.title.y = element_text(size=15))+
+  labs(x = 'probability', y ='trials', 
+       title = 'Study ranking', color = '')
+
+yusuf.prob=sum(res[1:3,7])
+# 73.06
+
+```
+
+In *Figure \@ref(fig:ranking)* the objective was to rank the various studies based on their posterior analysis. The intention was to emphasize those studies that indicate a lower risk in terms of mortality associated with the administration of beta-blockers to patients. Within the figure, each bar is partitioned into fifteen smaller boxes, representing the probabilities assigned to the respective rankings of each study. These boxes illustrate the likelihood of a particular study being ranked first, second, or in subsequent positions.
+
+The study conducted by *Yusuf et al*'s analysis stands out as having the lowest risk among the others. Notably, there is a substantial probability, precisely 73.06%, that this study is ranked within the top three positions.
+
+
+# Conclusions
+1) general reiteration of results
+To conclude, 
+The analysis did no determine the presence of evidence in favour of effectiveness of beta bl
+
+An important problem in the meta-analysis framework is the "file drawer problem", also known as publication bias. This issue arises from the fact that studies that fail to find evidence of the presence of scientifically significant effect oftentimes are not published, hence creating a bias in the scientific field dedicated to researching a particular problem (@dumouchel1994hierarchical). Hence, such studies cannot be included in the meta-analysis, which may cause for the overall estimates to be biased in favour of the presence of the effect. 
+
+A possible extension of the employed Bayesian hierarchical model could include incorporating the a prior distribution on the variance component, thus no longer regarding it as fixed at the true value (@hoff2009first). This approach would allow to incorporate information on the sampling distribution for each study, and improve the study-specific estimates by accounting for shared information. This would be especially beneficial for trials with low numbers of participants. 
+
+
+# References
