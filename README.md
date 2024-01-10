@@ -1,7 +1,5 @@
 # Corra_projects
 
-# Projects_dec2023
-
 This GitHub repository is designed to showcase three distinct projects:
 
 1. [Named Entity Recognition](./Named%20Entity%20Recognition/)
