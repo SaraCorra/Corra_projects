@@ -7,7 +7,7 @@ This GitHub repository is designed to showcase six distinct projects:
 3. [Digit recognition](./Digit%20Recognition/)
 4. [Bayesian hierarchical model: mortality risk](./Bayesian%20hierarchical%20model/)
 5. [Garch - Time series Analysis](./Research%20Projects/Garch%20-%20Time%20Series%20Analysis/)
-6. [ARMS - Adaptive Rejection Metropolis Sampling](./Research%20Projects/Garch%20-%20Time%20Series%20Analysis/) 
+6. [ARMS - Adaptive Rejection Metropolis Sampling](./Research%20Projects/ARMS%20-%20Adaptive%20Rejective%20Metropolis%20Sampling/) 
 
 ## Named Entity Recognition 
 
