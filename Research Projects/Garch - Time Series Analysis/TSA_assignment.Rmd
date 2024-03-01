@@ -1,0 +1,1372 @@
+---
+title: "Analysis of Financial Time Series"
+author: "Bottino Manuel, Corrà Sara, Poetto Patrick, Shaboian Goar"
+date: "11/2/2024"
+output:
+  bookdown::pdf_document2:
+    toc: false
+  pdf_document: default
+  officedown::rdocx_document: default
+  bookdown::html_document2: default
+fig.caption: yes
+always_allow_html: yes
+header-includes:
+  - \usepackage{xcolor}
+  - \definecolor{palegreentwo}{rgb}{0.90196, 1, 0.8902}
+  - \definecolor{lemon}{rgb}{1, 0.95, 0.90}
+  - \definecolor{white}{rgb}{1, 1, 1}
+bibliography: bibliography.bib 
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library (knitr)
+library(PerformanceAnalytics)
+library(xts)
+library (ggplot2)
+library (patchwork)
+library (TSA)
+library (kableExtra)
+library (dplyr)
+library (rugarch)
+library(ggplot2)
+library(patchwork)
+library(tseries)
+library(forecast)
+library(lmtest)
+library(RColorBrewer)
+library (MTS)
+```
+
+# Introduction
+
+For the purpose of the present analysis a univariate financial time series is proposed. A financial time series is a stochastic time process where the realization of each random variable defines the "level" (can be a price, exchange rate, index level, etc.) of a certain asset in the financial market. These kind of series have some features given by the microstructure of financial markets. The basic feature of the financial time series is a high frequency of individual values. This brings higher than usual influence of nonsystematic factors to the dynamism of the series and the result is relatively high volatility which usually changes through time. The systematic factors create the trend and cycle part of time series, while the seasonal part does not usually play a significant role. Other common issues in financial time series are non stationarity, strong autocorrelation up to many lags and (usually negatively) skewed, leptokurtic unerlying probability law. As mentioned, heteroskedasticity represents another common issue to be properly modeled if it's the case.
+
+## Dataset Description
+
+In this analysis the *FTSE Italy All Share Banks* time series has been collected from the [Investing.com data repository](https://it.investing.com/indices/ftse-italia-banks-historical-data), together with other financial time series. This is a financial index that traces the level of all the Italian banks which are listed in the stock market. Observations cover a four years time range, from 02/01/2019 to 30/12/2022. Since stocks are not traded over weekends or on holidays, only on so-called trading
+days, the FTSE data do not change over weekends and holidays. For simplicity, we will analyze the data as if they were equally spaced (@chan2008time).
+
+```{r loading, include=FALSE}
+fin_series=read.csv('data_fin1.csv')
+Sys.setlocale("LC_TIME", "English")
+bank=fin_series[,3]
+colnames(fin_series)[2] <- "Date"
+fin_series$Date <- as.Date(fin_series$Date, format = "%d.%m.%Y")
+dates <- as.POSIXct(fin_series$Date, format = "%d.%m.%Y")
+bank_xts <- xts(bank, order.by = dates)
+bank_return=bank_return <- CalculateReturns(bank_xts, method = "log")
+```
+
+This analysis aims at determining the model that guarantees plausible description for the observed series, making inference once the appropriate model is determined and generating forecasts for the future time periods (@shumway2000time). For that purpose, the multi-step strategy for time-series analysis was followed, with each of the following steps described further in the report:
+
+1) Preliminary analysis
+2) Model specification
+3) Model fitting
+4) Model diagnostics
+
+The resulting models, obtained after following those steps, are used for inference and forecasting.
+
+# Preliminary Data Analysis
+
+Preliminary analysis allows to discover possible trends and patterns in the data, make initial assumptions on stationarity of the series, as well as the variance and the presence of exogeneous effects. 
+
+## Visual Analysis
+
+The first step in preliminary analysis entails visualising the data.
+
+```{r log-scale-comparison, out.height='70%', out.width='70%', fig.align='center', fig.cap='Time series, normal and logarithmic scale.', echo=F}
+ts_df <- data.frame(date = fin_series$Date, value = fin_series$Banks)
+plot_normal <- ggplot(ts_df, aes(x = date, y = value)) +
+  geom_line(color='skyblue4', linewidth=1) +
+  theme_bw() +
+  labs(title = "Time Series - Normal Scale",
+       y = "Value",
+       x = "") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10))
+
+plot_log <- ggplot(ts_df, aes(x = date, y = log(value))) +
+  geom_line(color='skyblue4', linewidth=1) +
+  labs(title = "Time Series - Log Scale",
+       y = "Logarithmic Value",
+       x = "") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10))
+
+plot_normal / plot_log
+```
+
+*Figure \@ref(fig:log-scale-comparison)* demonstrates the behaviour of the series on the considered timeline. It is immediately noticeable that there are two huge drops corresponding to the Covid-19 outbreak in March 2020 and to the Russian Ukrainian war in February 2022. After the Covid-19 drop the markets slowly regained some of the losses and dropped the gains again in November 2020, when Pfizer announced its vaccine. From there on a bull run took place till the war began. 
+```{r extreme-events,  out.height='60%', out.width='60%', fig.align='center', fig.cap='Visual representation of the two extreme events depicted in the series, namely the Covid outbreak in 2020 and Ukraine invasion in 2022.', echo=F}
+subset1 <- fin_series[fin_series$Date >= as.Date("2020-03-01") & fin_series$Date <= as.Date("2020-03-17"), ]
+subset2 <- fin_series[fin_series$Date >= as.Date("2022-02-18") & fin_series$Date <= as.Date("2022-03-08"), ]
+# Plot for Covid 
+plot_covid <- ggplot(subset1, aes(x = Date, y = Banks)) +
+  geom_line(color='skyblue4', linewidth=1) +
+  theme_bw() +
+  labs(title = "Covid Outbreak (2020)",
+       y = "Value",
+       x = "2020") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10))
+
+# Plot for war 
+plot_war <- ggplot(subset2, aes(x = Date, y = Banks)) +
+  geom_line(color='skyblue4', linewidth=1) +
+  labs(title = "Ukraine Invasion (2022)",
+       y = "Value",
+       x = "2022") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10))
+
+plot_covid + plot_war
+```
+
+The main drops in the series are visualised specifically in *Figure \@ref(fig:extreme-events)*. During the covid outbreak Italian banks lost one third of their value in 16 days, meaning almost sixty billion euros in a couple of weeks^[[Source](https://www.bloomberg.com/view/articles/2020-03-12/coronavirus-triggers-the-worst-stock-market-crash-since-1987?embedded-checkout=true)]. From there to February 2022, when the war began, financial markets worldwide have put in place a bull run which brought a 107% gain for our index^[[Source]((https://www.nytimes.com/2022/02/23/business/stock-market-correction.html))].  In the 2022 case instead, the drop has not been less painful than the one of 2020 since after the bull run a crash brought losses again for a -32% on the market, bringing the levels back to pre-Covid eras. This information should be enough to state that financial time series are incredibly volatile and tough to be succesfully analysed.  
+
+
+```{r plots, fig.height=3, fig.width=5, fig.align='center', fig.cap='A histogram and a boxplot are provided to offer an initial onverview of the data distribution', echo=F, message=F, warning=FALSE}
+df <- data.frame(series = as.numeric(bank))
+
+histogram=ggplot(df, aes(x = bank)) +
+  geom_histogram(aes(y = after_stat(density)),binwidth=200,
+                 color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+
+  stat_density(geom = "line", aes(y = after_stat(density)), color = "royalblue4",  linewidth = 1.2, adjust=3) +
+  labs(title = 'Histogram', y='', x='')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+        text = element_text(size = 10))  # Arrange legend horizontally)
+
+
+boxplot=ggplot(df, aes(y = bank)) +
+  geom_boxplot(color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+
+  labs(title = 'Boxplot', y='', x='')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+  text = element_text(size = 10))
+
+histogram+boxplot
+
+```
+*Figure \@ref(fig:plots)* allows to make preliminary assessment of the distribution of the observed time series. It appears to be symmetric, ranging from the value for the index of 5265 to around 12000.
+
+Analysing the differenced up to the third order series allows to gain preliminary understanding of stationarity of the series.
+```{r differences,  echo=FALSE, warning=FALSE, message = FALSE, fig.height=8, fig.width=12, fig.align='center', fig.cap='Three order of difference are presented together with the corresponding autocorrelation values.'}
+
+threshold=2/sqrt(length(bank))
+bank_log=log(bank)
+## FIRST DIFFERENCE
+diff1.bank=ts(diff(bank_log))
+diff2.bank=ts(diff(diff1.bank))
+diff3.bank=ts(diff(diff2.bank))
+
+diffs <- list(diff1.bank = diff1.bank, diff2.bank = diff2.bank, diff3.bank = diff3.bank)
+
+plots=list()
+titles=c('First difference', 'Second difference','Third difference')
+
+for (i in 1:3){
+  
+  diff_df <- data.frame(date = fin_series$Date[(i+1):1019], value = diffs[[i]])
+  
+  plots[[i]] <- ggplot(diff_df, aes(x = date, y = value)) +
+    geom_line(color='skyblue4', linewidth=0.6) +
+    geom_hline(yintercept = 0,  color = "firebrick1", size=0.8)+
+    theme_bw() +
+    labs(title = titles[i],
+         y = "Value") +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+          axis.title.y = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          text = element_text(size = 8) )
+  
+  acf_diff <- acf(diffs[[i]], plot = FALSE)
+  
+  df <- data.frame(Lag = acf_diff$lag, Autocorrelation = acf_diff$acf)
+  
+  plots[[i+3]]=ggplot(df, aes(x = Lag, y = Autocorrelation)) +
+    geom_bar(stat = "identity", fill = "skyblue4") +
+    xlab("Lag") +
+    ylab("") +
+    labs(title='Autocorrelation')+theme_bw()+
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+          axis.title.y = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          text = element_text(size = 8))+
+    geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=0.8)+
+    scale_x_continuous(breaks = seq(1, 30, 2))
+}
+
+
+(plots[[1]]+plots[[4]])/(plots[[2]]+plots[[5]])/(plots[[3]]+plots[[6]])
+```
+It is possible to colnclude that, aside from the initial difference, the other two orders of differencing result in significant autocorrelation at lag 1, as depicted in *Figure \@ref(fig:differences)*. Consequently, we opt to proceed with our analysis while considering only the first order.
+
+## Data Transformation
+
+In financial analysis routine procedures it's quite common to analyse returns rather than prices. This is often done to get free of any scale and even non-stationarity of the mean. Also the returns are taken in percentage.  
+\[
+r_t = log(\frac{P_t}{P_{t-1}})*100 = (log(P_t) - log(P_{t-1}))*100
+\]
+
+```{r log-returns, out.height='60%', out.width='60%', fig.align='center', fig.cap='Logarithmic value of returns is presented.', echo=F}
+bank_return <- (diff(bank_log)) * 100
+df <- data.frame(date = fin_series$Date[2:1019], value = bank_return)
+
+ggplot(df, aes(x = date, y = value)) +
+  geom_line(color='skyblue4', linewidth=1) +
+  labs(title = "Log Scale Returns",
+       y = "Logarithmic Value",
+       x = "") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10))
+```
+As we can notice in *Figure \@ref(fig:log-returns)* log returns, or simply returns, look centered in zero. Additionally, heteroscedasticity may be hypothesized, as certain patterns may exhibit higher volatility than others. The series seems to be stationary in mean.
+
+This pattern of alternating quiet and volatile periods of substantial duration is referred to as volatility clustering in the literature. Volatility in a time series refers to the phenomenon where the conditional variance of the time series varies over time (@chan2008time).
+
+# Model Specification {#specification}
+
+Model specification implies selecting the model and the parameters for it that will provide a good fit to the observed data and allow to make inference. For that purpose, the first step is to investigate the stationarity of the series. 
+
+Considering the returns in percentage now, a ADF test is conducted to assess the stationarity of the series
+\small
+```{r adf-test-show, eval=F, echo=T, message=F, warning=FALSE}
+adf_result <- adf.test(bank_return, k = 20)
+```
+\normalsize
+```{r adf-test, echo=F, message=F, warning=FALSE}
+adf_result <- capture.output (adf.test(bank_return, k = 20))
+values <-  strsplit (strsplit(adf_result [5], ",") [[1]], " ")
+num_values <- sapply(values, function(x) {
+  numeric_values <- as.numeric(gsub("[^0-9.-]", "", x))
+  numeric_values <- na.omit(numeric_values)
+  return(numeric_values)
+})
+df_adf_test <- data.frame ("Lag" = num_values [[2]], "Test statistic" = num_values [[1]], "P-value" = num_values [[3]])
+knitr::kable (df_adf_test, caption = "Augmented Dickey-Fuller Test results for the returns", digits = 2, booktabs = T, align = "c")%>%
+  row_spec(0, background = 'lemon') %>%
+  kable_styling(full_width = FALSE)
+```
+
+The lag value was specified at 20 according to the visual analysis of the ACF plot from *Figure \@ref(fig:differences)*.Upon reviewing the documentation of the [package *"tseries"*](https://cran.r-project.org/web/packages/tseries/tseries.pdf), a p-value of 0.01 indicates "at most 0.01", leading to the rejection of the null hypothesis of non-stationarity in favor of the alternative hypothesis. Therefore, we can infer that the series is stationary. This implies that further differentiation, such as in model selection, may not be necessary.
+
+For the purpose of modelling, the selection will be performed among autoregressive (AR (p)), moving average (MA (q)), or mixed (ARMA (p, q)) models, which are special cases of the generalised linear process, which is a useful tool for modelling time series since it respects the properties demonstrated by the mean and the autocovariance functions that hold for stationary series (chan2008time).
+
+In order to specify the model, two approaches are used. The first concerns the autoregression and the partial autoregression functions, the former of which allows to infer on the order of the moving average model, and the latter -- the autoregressive model. The second approach entails the values of likelihood-based information criteria.
+
+## Autocorrelation and Partial Autocorrelation function 
+
+We now investigate the ACF and PACF of the series starting with the raw series.
+
+```{r acf-pacf-plots, warning=FALSE, message=FALSE,echo=FALSE}
+acf_pacf_plot <- function(input){ 
+  
+ acf_bank <- acf(input, plot = FALSE)
+  pacf_bank <- pacf(input, plot = FALSE)
+  df_acf <- data.frame(Lag = acf_bank$lag, Autocorrelation = acf_bank$acf)
+  df_pacf <- data.frame(Lag = pacf_bank$lag, Autocorrelation = pacf_bank$acf)
+  
+  acf_plot=ggplot(df_acf, aes(x = Lag, y = Autocorrelation)) +
+    geom_bar(stat = "identity", fill = "skyblue4") +
+    xlab("Lag") +
+    ylab("") +
+    labs(title='Autocorrelation')+theme_bw()+
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 10),
+          axis.title.y = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          text = element_text(size = 8))+
+    geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.3)+
+    scale_x_continuous(breaks = seq(1, 30, 2))
+  
+  
+  pacf_plot=ggplot(df_pacf, aes(x = Lag, y = Autocorrelation)) +
+    geom_bar(stat = "identity", fill = "skyblue4") +
+    xlab("Lag") +
+    ylab("") +
+    labs(title='Partial Autocorrelation')+theme_bw()+
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 10),
+          axis.title.y = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          text = element_text(size = 8))+
+    geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.3)+
+    scale_x_continuous(breaks = seq(1, 30, 2))
+  
+  acf_plot+pacf_plot
+  
+}
+```
+
+```{r acf-bank-log,  fig.height=3.5, fig.width=10, fig.align='center', fig.cap='ACF and PACF plot of the financial series.', echo=F}
+acf_pacf_plot(bank_log)
+```
+
+As already discussed, the situation should improve if returns rather than levels are considered.
+
+```{r acf-bank-return,  fig.height=3.5, fig.width=10, fig.align='center', fig.cap='ACF and PACF plot of the financial series returns.', echo=F}
+acf_pacf_plot(bank_return)
+```
+
+*Figure \@ref(fig:acf-bank-return)* does not allow to make any conclusive statements on the suggested specification of the model, hence specifying the model using likelihood-based criteria appears to be the optimal approach.
+
+## Likelihood-based Model Selection
+
+Since stationarity has already been assessed, further differentiation orders won't be investigated. 
+
+```{r arima-spec, message=FALSE, warning=FALSE, echo=FALSE}
+possible_p = possible_q = 0:3
+possible_d = 0
+
+all_permutations <- expand.grid(possible_p, possible_q, possible_d)
+all_permutations <- all_permutations[, c(1, 3, 2)]
+colnames(all_permutations) <- c("p", "d", "q")
+
+models=apply(all_permutations, 1, function(x) Arima(bank_return,order=x, include.mean = F) )
+# this arima function which the capital A seems to work better and 
+# provides the information about the drift 
+
+results <- sapply(models, function(model) {
+  AIC_val <- AIC(model)
+  BIC_val <- BIC(model)
+  
+  c(AIC = AIC_val,  BIC = BIC_val)
+})
+
+for_plotting=cbind(all_permutations, t(results))
+
+results.d_1=for_plotting[1:16,c(1,3,4,5)]
+
+best_model_row <- which.min(for_plotting$AIC)  # 16
+```
+
+```{r tile-plot, out.height='60%', out.width='60%', fig.align='center', fig.cap='Exploring the Impact of Autoregressive and Moving Average Parameters on Model Performance. The tile displays AIC values for model comparison.', echo=F}
+# limits=range(13260,14000)
+results=list(results.d_1=results.d_1)
+
+
+tile_plots <- ggplot(data=results[[1]], aes(factor(p), factor(q), fill= AIC)) +
+    geom_tile(color = "white",
+              lwd = 1,
+              linetype = 1) +
+    geom_text(aes(label = round(AIC,2)), color = "white", size = 4.5)+
+    scale_fill_viridis_c( option='G') +
+    scale_x_discrete(name = 'p', expand = c(0, 0))+
+    scale_y_discrete(name = 'q', expand = c(0, 0))+
+    guides(fill = guide_colourbar(barwidth = 1,
+                                  barheight = 10,
+                                  title = "AIC"))+
+    ggtitle('AIC values for different tested models')+
+    theme(plot.title = element_text(size = 17, face = "bold",hjust = 0.5),
+          axis.title.y=element_text(angle=0, vjust=0.6),
+          text = element_text(size = 10))
+
+tile_plots
+```
+
+*Figure \@ref(fig:tile-plot)* provides evidence that the best model in terms of AIC is the one with $p = 3$ and $q = 3$. Hence, for further analysis, ARMA (3, 3) model specification is used.
+
+# Model fitting 
+
+The ARMA (3,3) model is fit using Maximum Likelihood estimation method.
+
+```{r arima-fitting, echo = T, message=FALSE, warning=FALSE}
+arima_fit = Arima(bank_return,order=c(3,0,3),include.mean=FALSE,method='ML')
+```
+
+
+```{r coeftest, message=FALSE, warning=FALSE, echo=F}
+coeftest=coeftest(arima_fit)
+
+coeff=coeftest[,1]
+coeff=round(coeff,4)
+sterr=coeftest[,2]
+sterr=round(sterr,4)
+tvalue=coeftest[,3]
+tvalue=round(tvalue,4)
+pvalue=coeftest[,4]
+pvalue=round(pvalue,4)
+coef_table <- cbind(coeff,sterr,tvalue,pvalue)
+rownames(coef_table) <- c ("$\\phi_1$", "$\\phi_2$", "$\\phi_3$", "$\\theta_1$", "$\\theta_2$", "$\\theta_3$")
+colnames(coef_table) <- c("Coefficient","Standard Error","Z value","P-value")
+knitr::kable(coef_table, "simple", 
+             digits = 4, align = "c", caption = "Z test of coefficients", booktabs=T)%>%
+  row_spec(0, background = 'lemon') %>%
+  column_spec (0, background = 'lemon') %>%
+  kable_styling(full_width = FALSE)
+
+```
+
+Based on the coefficients' estimates and their statistical significance, we can assess the adequacy of the ARIMA(3,0,3) model. The statistically significant coefficients for the AR(1), AR(3), MA(1), and MA(3) terms suggest that these lagged values are essential predictors in the model, contributing significantly to explaining the variation in the series. However, the non-significant coefficients for AR(2) and MA(2) indicate that these lagged values might not be essential for capturing the underlying patterns in the data.
+
+# Model Diagnostics
+
+For the purpose of ensuring if the specified model fits the observed series well, it is necessary to perform model diagnostics. One of the most useful ways to perform model diagnostics is by investigating the residuals:
+$$\hat{\epsilon}_t = Y_t - \hat{\phi}_1 Y_{t-1} + \hat{\phi}_2 Y_{t-2} + \hat{\phi}_3 Y_{t-3}$$
+
+Residuals measure the deviation of the values obtained by using the parameters specified during the model fitting process from the observed values. For a correctly specified model, with parameters estimated close to their true values, the residuals should demonstrate the properties of a white noise process:
+1. Independence
+2. Identical Normal $(\mu, \sigma^2)$ distribution
+3. Absence of correlation
+```{r save-fit-ar, include=FALSE, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+#fit_ar <-fitted (arima_fit)
+#saveRDS(fit_ar, file = "fit_ar.RDS")
+```
+
+```{r res-first-test, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', out.width="60%", out.height="60%", fig.cap="Plot for observed time series and the fitted ARMA (3, 3) values."}
+fit_ar <- readRDS("fit_ar.RDS")
+res_ar <-residuals (arima_fit)
+
+df_res_first_test <- data.frame(observations = bank_return, fitted = as.numeric (fit_ar), residuals = as.numeric(res_ar))
+plot_fitted=ggplot(df_res_first_test, aes(x = observations, y = fitted)) +
+  geom_point(shape = 16, size = 1) +
+  labs(x = 'Observations', y = 'Fitted Values', title = 'Arima(3,0,3)') +
+  geom_abline(intercept = 0, slope=1, linetype = "solid", color = "red", size = 1) +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10),
+  text = element_text(size = 10))
+plot_fitted
+```
+From *Figure \@ref(fig:res-first-test)*, it can be observed that the points do not lie on the bisector for the first and the third quadrands, thus giving some evidence against the model being a good fit for the data.
+
+```{r res-second-test, fig.height=3.5, fig.width=10, fig.align='center', fig.cap='Residuals are displayed together with the corresponding autocorrelation values.', echo=F}
+df <- data.frame(residuals = as.numeric(res_ar))
+
+plot_residuals=ggplot(df, aes(x = 1:length(residuals), y = residuals)) +
+  geom_point(shape = 16, size = 1) +
+  labs(x = '', y = 'Residuals', title = 'Arima(3,0,3)') +
+  geom_abline(intercept = 0, slope=0, linetype = "solid", color = "red", size = 1.7) +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+  axis.title.y = element_text(size = 10),
+  axis.title.x = element_text(size = 10),
+  text = element_text(size = 10))
+
+
+acf_residuals <- acf(res_ar, plot = FALSE)
+df_acf <- data.frame(Lag = acf_residuals$lag, Autocorrelation = acf_residuals$acf)
+
+plot_acf_residuals <- ggplot(df_acf, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "grey33") +
+  xlab("Lag") +
+  ylab("") +
+  labs(title='Autocorrelation') +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_text(size = 10),
+    text = element_text(size = 10)
+  ) +
+  geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.5) +
+  scale_x_continuous(breaks = seq(1, 30, 2))
+
+plot_residuals+plot_acf_residuals
+```
+
+As demonstrated in *Figure \@ref(fig:res-second-test)*, there are no serious violation of the independence assumption detected on the scatterplot and the ACF function. The autocorrelation function only shows significant values for two higher-order lags.
+
+```{r res-third-test, fig.height=4.5, fig.width=11, fig.align='center', fig.cap='In order, an histogram, a boxplot and a qq-plot are employed to assess the assumption of normality', echo=F, message=F, warning=FALSE}
+
+norm.hist=ggplot(df, aes(x = residuals)) +
+    geom_histogram(aes(y = after_stat(density)),binwidth=1,
+                   color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+
+    stat_function(fun = dnorm, args = list(mean = mean(df$residuals), sd = sd(df$residuals)),
+                  aes(color = "Normal Density"), size = 1) +
+    labs(title = 'Histogram', y='', x='')+
+    theme_bw()+
+    scale_color_manual(values = "royalblue4", name = "")+
+    theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+          legend.position=c(.65,.9),  
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 10),
+          text = element_text(size = 10))  
+
+
+norm.box=ggplot(df, aes(y = residuals)) +
+  geom_boxplot(color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+
+  labs(title = 'Boxplot', y='', x='')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+  text = element_text(size = 10))
+
+
+qqplot=ggplot(df, aes(sample = residuals)) +
+  stat_qq(color = 'grey38', size = 1) +
+  stat_qq_line(col='lightsteelblue4', size=1)+
+  labs(title = "Normal QQ plot", y='', x='') +
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+  text = element_text(size = 10))
+
+norm.hist+norm.box+qqplot
+```
+
+Additionally, it is possible to observe severe deviations from the normality assumption. This conclusion is based both on the visual analysis of *Figure <res-third-test>*, since the boxplot of the residuals does not correspond to the normality assumption,the histogram shows a leptokurtic negatively skewed distribution (even though not so strong), and the Q-Q plot shows a pretty clear divergenge from the normal tails. 
+
+The Shapiro-Wilks test should consistently confirm that the assumption of normality doesn't hold, as can be graphically seen.
+
+```{r sw-test, echo=FALSE,message=FALSE, include=FALSE}
+shapiro_result <- shapiro.test(res_ar)
+df_table_shapiro <- data.frame ("Test statistic" = shapiro_result$statistic, "P-value" = "2.2e-16")
+knitr::kable (df_table_shapiro, caption = "Results of the Shapiro-Wilk test for the residuals of ARMA (3, 3) model",  booktabs = T, align = "c", row.names = F, digits = 4)%>%
+  row_spec(0, background = 'lemon') %>%
+  kable_styling(full_width = FALSE)
+```
+
+We reject the alternative normality hypothesis in favour of the null. Clusters of volatility or heteroskedasticity in general may play a role also for non normality of the residuals. 
+The null plot is showed paired with the ACF.
+
+Thus, it is possible to conclude that the selected ARMA (3, 3) model does not provide a good fit for the data. For the purpose of selecting a model that would provide a better fit to the data, a GARCH-based improvement procedure is proposed. 
+
+## Forecast 
+In order to forecast the ARIMA (3,0,3) we used the function forecast that, given the model, returns the predictions as well as the confidence interval. To these results we apply the same transformations as before, provide some plots and diagnostic measures.
+
+```{r forecast-arima, echo=FALSE, warning=FALSE, message=FALSE}
+actual_series=read.csv('ftse_2023.csv')
+
+colnames(actual_series)[1] <- 'Date'
+new_dates <- as.Date(actual_series$Date, format = "%d.%m.%Y")
+actual_series$Ultimo <- as.numeric(gsub(",", ".", gsub("\\.", "", actual_series$Ultimo)))
+bank_xts <- xts(actual_series$Ultimo, order.by = new_dates)
+new_bank_return <- CalculateReturns(bank_xts, method = "log")*100
+new_dates <- new_dates[order(new_dates)]
+values_df <- data.frame(date = tail(fin_series$Date,1018),
+                          value = bank_return)
+
+values_df <- values_df [order(values_df$date),]
+```
+
+
+
+```{r for-arima, warning=FALSE, message=FALSE}
+
+# Forecasting 
+n_prediction=10
+forecast_values = forecast(arima_fit, h = n_prediction) 
+
+# Add forecasted values to the data frame
+forecast_df <- rbind(values_df,data.frame(date = new_dates[-1],
+                     value = forecast_values$mean))
+
+n_rows <- nrow(forecast_df)
+range_forecasted <-(n_rows - n_prediction +1 ):n_rows # +1 because of dimension issues
+
+#insert upper and lower values in the new dataset
+forecast_df[range_forecasted, "lower_80"] <- as.vector(forecast_values$lower[,1])
+forecast_df[range_forecasted, "upper_80"] <- as.vector(forecast_values$upper[,1])
+
+forecast_df[range_forecasted, "lower_95"] <- as.vector(forecast_values$lower[,2])
+forecast_df[range_forecasted, "upper_95"] <- as.vector(forecast_values$upper[,2])
+
+
+```
+
+
+```{r plot-arima-ci, out.height='60%', out.width='60%', fig.align='center', fig.cap='True returns from December 18th 2022 to January 16th 2023 are represented with predicted values from the new year overlaid in red.', echo=F}
+forecast_df$Forecast <- ifelse(!is.na(forecast_df$lower_80), "Yes", "No")
+my_filter=forecast_df$date >= as.Date("2022-07-01") 
+plot_data_filtered=forecast_df[my_filter,]
+
+data_ribbons=forecast_df[!is.na(forecast_df$upper_80),]
+
+plot_data_filtered[,2:6] <- plot_data_filtered[,2:6]
+data_ribbons[,2:6] <- data_ribbons[,2:6]
+
+ggplot(plot_data_filtered, aes(x = date, y = value, color = factor(Forecast))) +
+  geom_line(linewidth=1) +
+  geom_ribbon(data = data_ribbons, aes(x = date, ymin = lower_80, ymax = upper_80), fill = "steelblue", alpha = 0.4, color = NA) +
+  geom_ribbon(data = data_ribbons, aes(x = date, ymin = lower_95, ymax = upper_95), fill = "lightsteelblue3", alpha = 0.4, color = NA) +
+  scale_color_manual(values = c("black","midnightblue")) +  # Define colors for the lines
+  labs(title = "Eleven-Step Ahead Forecast of Returns",
+       x = "Date",
+       y = "Values",
+       color = "Forecast") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10), 
+        legend.position = 'bottom')
+
+```
+The graph displays both the real returns and the forecasted returns of a financial time series. Real returns are depicted by a solid black line, while forecasted returns are represented by a solid blue line. The visible gap between the two can be attributed to market closures during holidays.
+
+As expected, the forecasted values can span across both positive and negative territories. This is confirmed by both the predicted values themselves and their corresponding confidence intervals. Indeed, two confidence intervals are delineated around the forecasted returns, 80% and 95%.
+
+Now, let's zoom a little more to see how our model behaves compared to reality.
+```{r plot-arima-zoom, out.height='60%', out.width='60%', fig.align='center', fig.cap='True returns from December 18th 2022 to January 16th 2023 are represented with predicted values from the new year overlaid in red.', echo=F, warning=F, message=F}
+
+last_10 <- max(0, nrow(forecast_df) - 9):nrow(forecast_df)
+df_copy <- forecast_df
+df_copy$value[last_10] <- new_bank_return[2:11]
+
+df_plot <- tail(df_copy, 19)
+predicted <- tail(forecast_df, n_prediction)
+
+df_plot[,2:6] <- df_plot[,2:6]
+predicted[,2:6] <- predicted[,2:6]
+
+ggplot(df_plot, aes(x = date, y = value)) +
+  geom_point(size=3, aes(color='Actual values')) +
+  geom_line(linetype = "solid", aes(color='Actual values')) +
+  geom_point(data=predicted, aes(x=date, y=value, color='Forecast'),size=3)+
+  geom_line(data=predicted, aes(x=date, y=value,  color='Forecast'), linetype = "dashed")+
+  scale_color_manual(name = 'Lines',
+                     breaks = c('Actual values', 'Forecast'),
+                     labels = c('Actual values', 'Forecast'),
+                     values = c('Actual values' = 'black', 'Forecast' = 'red')) +
+  labs(title = "Ten-Step Ahead Forecast of Returns",
+       x = "Date",
+       y = "Values",
+       color = "Forecast") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10), 
+        legend.position = 'bottom')
+
+
+```
+The black line shows the financial time series with new data, which goes form the 3rd to the 16th of January. It is noticeable that, except for some previsions, most are not even the right sign. Thus, it is not a reliable model for any financial experts willing to use it. 
+
+
+# Time Series models of heteroskedasticity
+
+Heteroskedasticity, or non-constant variance, is a pervasive problem for financial time series. In contrast to the previously implemented model, in order to address the problem of heteroskedasticity, the conditional variance of the observation at time t, given all the previous values of the series, is not considered constant.
+
+From *Figure \@ref(fig:log-scale-comparison)* we have observed that there were time periods where the series demonstrated larger variance with respect to the other time intervals, some of the most prominent ones coincided with the Covid-19 pandemic and the war in Ukraine. 
+\small
+```{r vol-show, warning=FALSE, message=FALSE, echo=T}
+z_xts <- xts(bank_return, order.by=dates [2:1019])
+realizedvol <- rollapply(z_xts, width = 20, FUN=sd.annualized)
+```
+\normalsize
+```{r vol, echo=FALSE, message=FALSE, warning=FALSE, out.width='60%', out.height='60%', fig.align='center',fig.cap="Realised volatility of the returns"}
+df <- data.frame(dates = as.Date (dates [21:length (dates)]),
+                  realizedvol =na.omit (realizedvol))
+vol_plot <- ggplot(df, aes(x = dates, y = realizedvol)) +
+    geom_line() +
+    xlab("") +
+    ylab("Realized Volatility") +
+    labs(title = 'Realized Volatility Over Time') +
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        text = element_text(size = 10),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(vjust = 1)
+    ) +
+    scale_x_date(breaks = seq(min(df$dates), max(df$dates), by = "4 months"), date_labels = "%b %Y")
+vol_plot
+```
+
+*Figure \@ref(fig:vol)* provides evidence of non-constant variance, as well as some variance clustering. The problem of heteroscedasticity leads to the violation of the assumption of constant variance, which the ARIMA (p, q) model relies on. Hence, a different methodology should be impletemted in order to address it.
+
+## Test for serial correlation
+
+Box & Pierce (1970) noted that if the model were appropriate and the parameters were known, the quantity
+
+$$
+Q(r)=n(n+2)\sum^m_{k=1}(n-k)^{-1}r^2_k
+$$
+where
+
+$$
+r_k=\sum^n_{k+1}\frac{a_t a_{t-k}}{\sum^n_{t=1}a^2_t}
+$$
+would for large $n$ be distributed as $\chi^2_m$ since the limiting distribution of $r=(r_1,...,r_m)'$ is multivariate normal with mean vector zero. Using the further approximation $var(r_k)=\frac{1}{n}$, they suggested that the distribution of
+
+$$
+Q(r)=n\sum^m_{k=1}r^2_k
+$$
+could be approximated byt that of $\chi^2_m$. Furthermore, they showed that when the $p+q$ parameters of an appropriate model are estimated and the $\hat r_k$'s replace the $r_k$'s, then 
+
+$$
+Q(\hat r)=n\sum^m_{k=1}\hat r^2_k
+$$
+would for large $n$ be distributed as $\chi^2_{n-p-q}$ yielding an approximate test for series autocorrelation (@ljung1978measure).
+
+```{r Ljung-Box, out.height='40%', out.width='40%', fig.align='center', fig.cap='Ljung-Box test reveals autocorrelation in bank log-returns, marked by p-values below 0.05.', echo=F}
+lags <- 1:30
+p_values <- sapply(lags, function(lag) {
+  Box.test(bank_return[2:length(bank_return)], lag = lag, type = "Ljung-Box")$p.value
+})
+
+df <- data.frame(lags = lags, p_values = p_values)
+
+# Plot using ggplot2
+ggplot(df, aes(x = lags, y = p_values)) +
+  geom_point(color = "navyblue", shape = 19, size=2) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "darkred", linewidth=1.3) +
+  labs(x = "Lag", y = "P-value", title = "Ljung-Box Test for Log-returns") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.position = "topright") +
+  geom_text(x = Inf, y = 0.15, label = "Significance Level (0.05)", hjust = 1, color = "darkred")+
+  scale_x_continuous(breaks = seq(0, 30, 3))
+
+```
+
+In *Figure \@ref(fig:Ljung-Box)* the Ljung-Box test for 30 lag is presented. The aim is to assess the presence of serial autocorrelation in the series. We can notice that, except for the first lag, in all other cases the p-values appears to be smaller than the threshold. This implies that past values of the series are correlated with future values. In financial markets, this often indicates the presence of volatility clustering, where periods of high volatility tend to be followed by more periods of high volatility, and vice-versa.
+
+## Methods for Modelling Conditional Heteroscedasticity
+
+### ARCH Model
+
+The autoregressive conditional heteroscedasticity, or ARCH, model was introduced by @engle1982autoregressive in order to model the conditional volatility of a series by
+taking it as the response variable. The main distinction from a simple regression model is that ARCH uses a non-observable latent variable, the conditional variance. The squared returns $r_t$ provide an unbiased estimator for the conditional variance $\sigma^2_{t \vert t-1}$, hence the ARCH (1) model is specified as follows:
+
+$$ r_t = \sigma_{t \vert t-1} a_t $$
+$$ \sigma^2_{t \vert t-1} = \omega + \alpha \ r^2_{t-1} $$
+Increasing the order of the ARCH (p) model implies including more lags into the model specification. Note that $\alpha$ and $\omega$ are the parameters to be estimated along with the autoregressive coefficients. 
+
+The advantages of the ARCH model entail producing volatility clusters, as well as allowing the distribution of the white noise process $\{A_t\}$ distribution to have heavy tails, thus allocating more probability to account for the possible extreme events. 
+
+In order to investigate if the using ARCH (p) is justified for the stochastic process that is being modelled in this analysis, the ARCH test was used (@engle1982autoregressive).
+
+```{r arch-test, warning=FALSE,message=FALSE, echo=FALSE}
+output <- capture.output (archTest((bank_return)))
+extract_values <- function(test_output) {
+  test_statistic <- as.numeric(sub(".*Test statistic: *([0-9.]+).*", "\\1", test_output))
+  p_value <- as.numeric(sub(".*p-value: *([0-9.]+).*", "\\1", test_output))
+  return(list ("stat" = test_statistic, "pval" = p_value))
+}
+
+archtest_table <- data.frame(
+  c (output [1], output [3]),
+  c(extract_values (output [2])$stat, extract_values (output [4])$stat),
+  c(extract_values (output [2])$pval, extract_values (output [4])$pval)
+)
+colnames_t <- c ("Test", "Statistic value", "P-value")
+knitr::kable(archtest_table, col.names = colnames_t, format = "markdown", booktabs = TRUE, digits = 4, caption = "Results of the ARCH test") %>%
+  kableExtra::row_spec(c(0,2), background = 'lemon')
+```
+
+As shown in *Table \@ref(tab:arch-test)*, the null hypothesis states that the residuals exhibit no ARCH effects, which is rejected. An additional method is to investigate the autocorrelation values for the squares of mean-adjusted series, which is useful since that is the unbiased estimator of the variance (@cowpertwait2009introductory). 
+
+```{r mean-adj, echo=FALSE, message=FALSE, warning=FALSE, out.width='60%', out.height='60%', fig.align='center',fig.cap="Autocorrelation of the squares of the returns"}
+acf_squares <- acf (bank_return ^2, plot = FALSE)
+df_acf_squares <- data.frame(Lag = acf_squares$lag, Autocorrelation = acf_squares$acf)
+threshold=2/sqrt(length(bank_return))
+plot_acf_squares <- ggplot(df_acf_squares, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "grey33") +
+  xlab("Lag") +
+  ylab("Values") +
+  labs(title='Autocorrelation of squared returns') +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_text(size = 10),
+    text = element_text(size = 10)
+  ) +
+  geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.5) +
+  scale_x_continuous(breaks = seq(1, 30, 2))
+plot_acf_squares
+```
+*Figure \@ref(fig:mean-adj)* demonstrates that the series exhibit conditional heteroskedastic behaviour.
+
+### GARCH Model
+
+To be able to capture more patterns in the observed series, a generalisation of the autoregressive conditional heteroscedasticity model (GARCH) is used, which was proposed by @bollerslev1986generalized. The advantage is that it adds the lags of the conditional variance to the model specification: 
+
+$$ \sigma^2_{t \vert t-1} = \omega + \beta_1 \sigma^2_{t-1 \vert t-2} + ... + \beta_p \sigma^2_{t-p \vert t-p - 1}  \alpha_1 r^2_{t-1} + \alpha_2 r^2_{t-2} + ... + \alpha_q r^2_{t-q}$$
+
+### Model Specification and Fitting
+To specify the model above, it is necessary to determine the orders p and q. To obtain a preliminary idea on the possibly acceptable value of the parameter p, the residuals of the ARIMA (3, 0, 3) model specified [above](#specification) are investigated for autocorrelation.
+
+```{r res-sq-acf, echo=FALSE, message=FALSE, warning=FALSE, out.width='60%', out.height='60%', fig.align='center',fig.cap="Autocorrelation of the squares of the residuals of ARMA (3, 3) model"}
+acf_res_squares <- acf (res_ar ^ 2, plot = F)
+df_acf_res_squares <- data.frame(data.frame(Lag = acf_res_squares$lag, Autocorrelation = acf_res_squares$acf))
+plot_acf_res_squares <- ggplot(df_acf_squares, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "grey33") +
+  xlab("Lag") +
+  ylab("Values") +
+  labs(title='Autocorrelation of squared residuals') +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_text(size = 10),
+    text = element_text(size = 10)
+  ) +
+  geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.5) +
+  scale_x_continuous(breaks = seq(1, 30, 2))
+plot_acf_res_squares
+```
+*Figure \@ref(fig:res-sq-acf)* suggests the possibility to use lag 2. To obtain quantifiable results, grid search is conducted, with possible values for parameters p and 1 varying in $\{1, 2\}$.
+\small
+```{r garch-spec, echo=TRUE, message=FALSE, warning=FALSE}
+possible_p = possible_q = 1:2
+grid <- expand.grid (possible_p, possible_q)
+colnames (grid) <- c ('p', 'q')
+fit_garch <- function (data, pars, distr = "norm"){
+  spec <- ugarchspec(variance.model=list(garchOrder=pars),
+                  mean.model=list(armaOrder=c(3,3)),distribution.model=distr)
+  fit <- ugarchfit (data = na.omit (data), spec = spec)
+  return (fit)
+}
+garch_fits_norm <- apply (grid, 1, function (x) fit_garch (bank_return, x)) 
+```
+\normalsize
+The model was fitted using *rugarch* package which allows to specify the order of the heteroskedastic model, along with the order of the mean model, which was previously determined to be ARIMA (3, 3). Additionally, the package allows flexibility in terms of the distribution of the white noise process. For the current model specification, Normality is assumed to hold.
+\small
+```{r garch-spec-ics, warning=TRUE, message=TRUE, echo=F}
+criteria <- function (fit, series = bank_return){
+  likelihood <- likelihood (fit)
+  aic <- -2 * (likelihood) + 2 * length (coef (fit))
+  bic <- -2 * (likelihood) + log (length (series)) * length (coef (fit))
+  return (list ("AIC" = round (aic, 2), "BIC" = round (bic,2)))
+}
+criteria_garch <- sapply (garch_fits_norm, criteria)
+```
+\normalsize
+```{r table-garch-spec, echo=FALSE, message=FALSE, warning=FALSE}
+colnames_sel <- apply(grid, 1, function(row) {
+  paste0("(", paste(row, collapse = ","), ")")
+})
+# colnames_sel <- c ("(p, q)", colnames_sel)
+kable (criteria_garch, col.names = colnames_sel, format = "markdown", booktabs = F, align = "c", caption='AIC and BIC criteria for the 4 models compared')%>%
+  column_spec(1, background = "lemon") %>%
+  row_spec(0, background = 'lemon') %>%
+  kable_styling(full_width = FALSE)
+```
+
+To perform model selection based on the maximum likelihood values, *Table \@ref(tab:table-garch-spec)* is analysed. It demonstrates that Bayesian Information Criterion, along with the Akaike Information Criterion, is minimised for GARCH (1, 1). Moreover, theoretic results demonstrate that this model outperforms other specifications (@hansen2005forecast). Hence, the model GARCH (1, 1) was fitted using the maximum likelihood method through numeric optimisation. 
+\small
+```{r, message=FALSE,echo=TRUE,warning=FALSE}
+spec <- ugarchspec(variance.model=list(garchOrder= c (1, 1)),
+                  mean.model=list(armaOrder=c(3,3)),distribution.model="norm")
+garch_fit <- ugarchfit (data = bank_return, spec = spec)
+```
+\normalsize
+```{r garch-inference, echo=F, message=F, warning=FALSE}
+fit_output_garch <- garch_fit@fit$matcoef
+rownames (fit_output_garch) <- c ("$\\mu$","$\\phi_1$", "$\\phi_2$", "$\\phi_3$", "$\\theta_1$", "$\\theta_2$", "$\\theta_3$", "$\\omega$", "$\\alpha_1$","$\\beta_1$")
+colnames (fit_output_garch) [c (3, 4)] <- c ("t-Statistic", "P-value")
+  
+knitr::kable (fit_output_garch, caption = "t-Test for the estimated coefficients of GARCH (1, 1) model", digits = 4, booktabs = T, align = "c", format = "latex", escape = F)%>%
+  row_spec(0, background = 'lemon')%>%
+  column_spec(1, background = 'lemon')%>%
+  kable_styling(full_width = FALSE)
+```
+*Table \@ref(tab:garch-inference)* provides the values for the estimted parameters of the GARCH (1,1) model along with their respective standard errors, as well as the values for the t-statistic for the hypothesis testing $H_0: \theta = 0$ with the two-sided p-values. The outcomes suggest that there is statistical evidence to reject the null, hence all the estimates can be considered statistically significant at $\alpha = 0.05$, which provides an improvement over the ARMA (3, 3) fit. 
+```{r garch-tests-results, echo = F, warning=FALSE, message=FALSE}
+garch_out <- capture.output (garch_fit)
+
+extract_t_pval <- function (string_in, test = "LB"){
+  out <- strsplit(string_in, " ")
+  cur = 1
+  t = pval = NA
+  for (i in 1:length (out [cur] )){
+    if (test == "LB"){
+      t = out [[i]] [[length (out [[i]]) - 2]]
+    }
+    if (test == "LM"){
+      t = out [[i]] [[length (out [[i]]) - 4]]
+    }
+    if (test == "P"){
+      t = out [[i]] [[length (out [[i]]) - 7]]
+    }
+    pval = out [[i]] [[length (out [[i]])]]
+  }
+  return (list ("t" = t, "pval" = pval))
+}
+LB_resids <- sapply (garch_out [52:54], function (x) extract_t_pval(x, "LB"))
+colnames (LB_resids) <- c ("Lag 1", "Lag 17", "Lag 29")
+LB_resids_sq <- sapply (garch_out [61:63], function (x) extract_t_pval(x, "LB"))
+colnames (LB_resids_sq) <- c ("Lag 1", "Lag 5", "Lag 9")
+LM_arch_test <- sapply (garch_out [69:71], function (x) extract_t_pval(x, "LM"))
+colnames (LM_arch_test) <- c ("Lag 3", "Lag 5", "Lag 7")
+#P_test <- sapply (garch_out [99:102], function (x) extract_t_pval(x, "P"))
+#colnames (P_test) <- c ("Group 20", "Group 30", " Group 40", "Group 50")
+#saveRDS (P_test, "P_test.RDS")
+
+P_test <- readRDS ("P_test.RDS")
+df_tests <- data.frame (rbind (c ("", ""),t (LB_resids),c ("", ""), t (LB_resids_sq),c ("", ""), t (LM_arch_test), c ("", ""), t (P_test)))
+df_tests$rownames <- c ("Weighted Ljung-Box Test on Standardized Residuals",colnames(LB_resids),"Weighted Ljung-Box Test on Standardized Squared Residuals", colnames(LB_resids_sq), "Weighted ARCH LM Tests", colnames (LM_arch_test), "Adjusted Pearson Goodness-of-Fit Test", colnames (P_test))
+df_tests [, c (1,2,3)] <- df_tests [, c(3,1,2)]
+colnames(df_tests) <- c ("Specification", "Test statistic", "P-value")
+knitr::kable (df_tests,row.names = F, caption = "Tests for the GARCH (1, 1) fit", digits = 4, booktabs = T, align = "l")%>%
+  row_spec(0, background = 'lemon')%>%
+  kable_styling(full_width = FALSE)
+```
+
+Moreover, from the output of the fitted model it is possible to extract additional information on the outcomes of certain statistical tests, which are provided in *Table \@ref(tab:garch-tests-results)*. 
+
+As such, the Weighted Ljung-Box tests were conducted on both the standartised residuals, and their squared values, with the obtained p-values indicating evidence in favour of the null hypothesis of the independence of the distribution, hence it is possible to conclude that the residuals are independent. This test allows to [assess](https://cran.r-project.org/web/packages/rugarch/vignettes/Introduction_to_the_rugarch_package.pdf) the adequacy of the ARMA fit. Additionally, the LM ARCH test demonstrates evidence in favour of the null, thus implying that the ARCH model is fitted adequately (@fisher2012new). According to the results of Pearson's goodness of fit test, the hypothesis that empirical distribution of the standartised residuals coincides with the theoretical distribution is not rejected at $\alpha = 0.05$ for each case except the first^[[Source](https://logicalerrors.wordpress.com/2017/08/14/garch-modeling-conditional-variance-useful-diagnostic-tests/)].
+
+```{r save-fit-garch, eval=FALSE, echo=FALSE, include=FALSE, message=FALSE, warning=FALSE}
+#fit_garch <- fitted (garch_fit)
+#saveRDS (fit_garch, file = "fit_garch.RDS")
+```
+```{r read-fitted-garch,  echo=FALSE, message=FALSE, warning=FALSE}
+fit_garch <- readRDS ("fit_garch.RDS")
+```
+
+
+
+#### Series with Two Conditional Standard Deviations
+
+```{r 2-st-deviations, out.height='60%', out.width='60%', fig.align='center', fig.cap='Original series of squared returns along with two lines representing the conditinal standard deviation derived from the arch model', echo=F, fig.pos='H'}
+
+# code reference 
+# https://rdrr.io/cran/rugarch/src/R/rugarch-plots.R#sym-.plot.garchfit.1
+
+T = garch_fit@model$modeldata$T
+insample = 1:T
+xdates  = dates[2:length(dates)]
+xseries = garch_fit@model$modeldata$data[insample]
+xsigma  = garch_fit@fit$sigma
+ci = 2
+data <- data.frame(xdates = xdates, xseries = xseries, ci = ci * xsigma)
+
+# Plot with ggplot2
+ggplot(data, aes(x = xdates, y = xseries)) +
+  geom_line(color = "steelblue") +
+  geom_line(aes(y = ci), color = "firebrick1") +
+  geom_line(aes(y = -ci), color = "firebrick1") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = "Time", y = "Returns", 
+       title = "Series with 2 Conditional SD Superimposed") +
+  theme_bw()+
+  theme(plot.title = element_text(size = rel(1.5), face = "bold", hjust = 0.5),
+        panel.grid.major = element_line(colour = "grey", linetype = "dashed"))
+
+```
+The plot depicted in *Figure \@ref(fig:2-st-deviations)* exhibits the series of squared returns alongside two lines representing the conditional standard deviation derived from the GARCH model. It reveals that the variability of the returns aligns closely with the fluctuations observed in the series, indicative of a dynamic relationship between volatility and market movements. This coherent relationship underscores the efficacy of the GARCH model in capturing and predicting the changing volatility patterns inherent in financial returns data.
+
+#### Series with 1% VaR Limits
+
+VAR is a measure of losses resulting from “normal” market movements. Losses greater than the VAR are suffered only with a specified small probability (@linsmeier2000value).
+
+To formally define a portfolio's VAR, one first must choose two quantitative factors: the length of the holding horizon and the confidence level. Both are
+arbitrary. As an example, the latest proposal of the Basle Committee defines a VAR measure using a 99 percent confidence interval (@jorion1996risk2). We will adopt this latter approach.
+
+The expression of the confidence interval will be the following:
+
+$$
+\hat y \pm z_{\frac{1+0.99}{2}} \cdot \frac{\sigma}{\sqrt{n}}
+$$
+where $\hat y$ correspond to the fitted values of the garch model. 
+
+```{r var-limits,  out.height='60%', out.width='60%', fig.align='center', fig.cap='Original series of squared returns with the 1 percent VaR limit superimposed, which indicates the maximum loss with 99 percent confidence.', echo=F}
+
+distribution = garch_fit@model$modeldesc$distribution
+xcmu = fit_garch
+idx = garch_fit@model$pidx
+pars  = garch_fit@fit$ipars[,1]
+if(distribution == "ghst") ghlambda = -shape/2 else ghlambda = pars[idx["ghlambda",1]]
+z1 	= 0.01
+z2 	= 0.99
+q01 	= fit_garch + sigma(garch_fit)* 
+  qdist(distribution, z1, 0, 1, lambda = ghlambda)
+q99 	= fit_garch + sigma(garch_fit)* 
+  qdist(distribution, z2, 0, 1, lambda = ghlambda)
+
+plot_data <- data.frame(xdates = xdates, 
+                        xseries = xseries,
+                        q01 = q01,
+                        q99 = q99)
+
+# Create the plot
+ggplot(plot_data, aes(x = xdates)) +
+  geom_line(aes(y = xseries), color = "black") +
+  geom_line(aes(y = q99), color = "dodgerblue4") +
+  geom_line(aes(y = q01), color = "dodgerblue4") +
+  labs(x = "Time", y = "Returns",
+       title = "Series with 1% VaR Limits") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12, face = "bold"),
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        panel.grid.major = element_line(colour = "grey", linetype = "dashed")) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  geom_ribbon(aes(ymin = q01, ymax = q99), fill = "lightblue", alpha = 0.3)
+
+```
+The plot in *Figure \@ref(fig:var-limits)* exhibits the original series of  returns alongside the superimposed 1% VaR limits, serving as a crucial measure for assessing the maximum potential loss a portfolio might face. The *Value at Risk* provides insight into the extreme downside risk associated with a portfolio or investment strategy, offering a quantifiable estimate of potential losses with a specified level of confidence.
+
+The proximity of the returns to the VaR limits indicates periods of heightened risk and potential vulnerability to significant losses. Conversely, when the  returns remain well within the VaR limits, it suggests a lower risk environment and a higher degree of confidence in the portfolio's stability.
+
+#### Cross-correlation
+
+```{r cross-correlation, out.height='60%', out.width='60%', fig.align='center', fig.cap='cross-correlation between the original series of returns and the squared returns. It helps in understanding if there is any relationship between the returns and their volatility', echo=F, message=F, warning=FALSE}
+
+lag.max = as.integer(10*log10(T))
+ccfx	= ccf(xseries^2, xseries, lag.max = lag.max, plot = FALSE)
+clim0	= qnorm((1 + 0.95)/2)/sqrt(ccfx$n.used)
+ylim 	= range(c(-clim0, clim0, as.numeric(ccfx$acf)))
+clx 	= vector(mode="character",length=(2*lag.max)+1)
+
+# Calculate cross-correlation
+ccfx <- ccf(xseries^2, xseries, lag.max = lag.max, plot = FALSE)
+
+# Calculate confidence limits
+clim0 <- qnorm((1 + 0.95)/2)/sqrt(ccfx$n.used)
+ylim <- range(c(-clim0, clim0, as.numeric(ccfx$acf)))
+
+# Create a data frame for plotting
+plot_data <- data.frame(lag = as.numeric(ccfx$lag),
+                        acf = as.numeric(ccfx$acf),
+                        clx = as.numeric(ccfx$acf))
+
+# Create the plot
+ggplot(plot_data, aes(x = lag, y = acf, fill = 'skyblue4')) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = c(clim0, -clim0), linetype = "dashed", color = "firebrick1", linewidth=1.3) +
+  geom_hline(yintercept = 0, color = "black") +
+  labs(x = "Lag", y = "ACF",
+       title = "Cross-Correlations of Returns vs Squared Returns") +
+  scale_fill_identity() +
+  theme_bw() +
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12, face = "bold"),
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        legend.position = "none") +
+  scale_x_continuous(breaks = seq(-30, 30, 3))
+
+```
+The plot in *Figure \@ref(fig:cross-correlation)* illustrates the cross-correlation between the original series of returns and the squared returns, providing insights into the relationship between the returns and their corresponding volatility. 
+This pattern suggests that while there is an initial strong negative correlation between returns and volatility, this relationship attenuates as the lag increases, eventually tapering off.
+
+__Normality assessment __:
+
+```{r empirical-density, out.height='60%', out.width='60%', fig.align='center', fig.cap='Empirical density of the standardized residuals derived from the GARCH model. It helps in assessing the adequacy of the chosen distributional assumption.', echo=F}
+
+zseries = as.numeric(residuals(garch_fit, standardize=TRUE))
+
+ggplot(data = data.frame(zseries = zseries), aes(x = zseries)) +
+  geom_histogram(aes(y = after_stat(density)), 
+                 binwidth = diff(range(zseries)) / 55, fill = "skyblue3", color = "white", alpha=0.7) +
+  labs(title = "Empirical Density of Standardized Residuals",
+       x = "Standardized Residuals", y = "Frequency") +
+  stat_density(geom = "line", aes(y = after_stat(density),color = "Data"),  linewidth = 1.2, adjust=3) +
+  stat_function(aes(col='Normal'),fun = dnorm, args = list(mean = mean(zseries), sd = sd(zseries)),  linewidth = 1.2) +  # Add normal density line
+  scale_color_manual(name = 'Lines',
+                     breaks = c('Data', 'Normal'),
+                     labels = c('Data', 'Normal'),
+                     values = c('Data' = 'darkblue', 'Normal' = 'red')) +  # Adjust color scale
+  theme_bw() +
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12, face = "bold"),
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5)) +
+  coord_cartesian(ylim = c(0, 0.55), xlim=c(-3.5,4.5))+
+  scale_x_continuous(breaks = seq(-3, 5, 1))
+
+```
+*Figure \@ref(fig:empirical-density)*  illustrates a comparison between the empirical density of the standardized residuals and the density of an actual normal distribution. A notable distinction is observed primarily at the center of the distribution, where the normal density would allocate more density. While the overall situation appears acceptable, further investigation will be conducted below.
+
+### Model Diagnostics
+
+```{r normality-check,  fig.height=4.5, fig.width=11, fig.align='center', fig.cap='In order, an histogram, a boxplot and a qq-plot are employed to assess the assumption of normality', echo=F, message=F, warning=FALSE}
+
+df <- data.frame(residuals = as.numeric(residuals(garch_fit)))
+
+norm.hist=ggplot(df, aes(x = residuals)) +
+  geom_histogram(aes(y = after_stat(density)),binwidth=1,
+                 color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+
+  stat_function(fun = dnorm, args = list(mean = mean(df$residuals), sd = sd(df$residuals)),
+                aes(color = "Normal Density"), size = 1) +
+  labs(title = 'Histogram', y='', x='')+
+  theme_bw()+
+  scale_color_manual(values = "royalblue4", name = "")+
+  theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+        legend.position=c(.65,.9),  
+        legend.direction = "horizontal",
+        legend.text = element_text(size = 10),
+        text = element_text(size = 10))  
+   # coord_cartesian(ylim = c(0, 1))
+
+
+norm.box=ggplot(df, aes(y = residuals)) +
+  geom_boxplot(color = "lightsteelblue4", fill = "lightsteelblue2", alpha = 0.5)+
+  labs(title = 'Boxplot', y='', x='')+
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        text = element_text(size = 10))
+
+
+qqplot=ggplot(df, aes(sample = residuals)) +
+  stat_qq(color = 'grey38', size = 1) +
+  stat_qq_line(col='lightsteelblue4', size=1)+
+  labs(title = "Normal QQ plot", y='', x='') +
+  theme_bw()+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        text = element_text(size = 10))
+
+norm.hist+norm.box+qqplot
+```
+As we can see in *Figure \@ref(fig:normality-check)* although symmetry appears to be maintained, a discernible deviation from normality is evident in the qqplot when comparing the theoretical quantiles of a normal distribution with those of the empirical residuals. Notably, the distribution appears to be skewed to the left. This departure from normality may stem from the skewed data distribution, a frequently encountered characteristic in financial contexts.
+
+Hence, meticulous attention is warranted when interpreting the model's findings, given their dependency on the underlying assumption of normality. Any deviation from this assumption might introduce biases or inaccuracies into the model's outputs, potentially leading to erroneous conclusions.
+
+
+```{r acf-std-residuals,   fig.height=3.5, fig.width=10, fig.align='center', fig.cap='ACF plot of standardized residuals.', echo=F}
+
+n=length(zseries)
+acfx 	= acf(zseries, lag.max = lag.max, plot = FALSE)
+# Dataframe with lag values and autocorrelation
+df <- data.frame(Lag = acfx$lag, Autocorrelation = acfx$acf)
+threshold=2/sqrt(n)
+
+acf_res=ggplot(df, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "skyblue4") +
+  xlab("Lag") +
+  ylab("") +
+  labs(title='Autocorrelation residuals')+theme_bw()+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
+        axis.title.y = element_text(size = 8),
+        axis.title.x = element_text(size = 8),
+        text = element_text(size = 12))+
+  geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.3)+
+  scale_x_continuous(breaks = seq(1, 30, 2))
+
+acfx 	= acf(zseries^2, lag.max = lag.max, plot = FALSE)
+# Dataframe with lag values and autocorrelation
+df <- data.frame(Lag = acfx$lag, Autocorrelation = acfx$acf)
+
+acf_sq_res=ggplot(df, aes(x = Lag, y = Autocorrelation)) +
+  geom_bar(stat = "identity", fill = "skyblue4") +
+  xlab("Lag") +
+  ylab("") +
+  labs(title='Autocorrelation squared residuals')+theme_bw()+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
+        axis.title.y = element_text(size = 8),
+        axis.title.x = element_text(size = 8),
+        text = element_text(size = 12))+
+  geom_hline(yintercept = c(-threshold, threshold), linetype = "dashed", color = "firebrick1", size=1.3)+
+  scale_x_continuous(breaks = seq(1, 30, 2))
+
+acf_res+acf_sq_res
+
+```
+In *Figure \@ref(fig:acf-std-residuals)*, the autocorrelation functions for returns and squared returns are displayed. It's noticeable that the ACF for returns remains largely within the bounds, with only slight deviations observed at lags 1, 6, and 17. Overall, these fluctuations do not raise significant concerns, leading us to conclude that the autocorrelation on returns is within an acceptable range.
+
+Regarding the ACF for squared returns, which reflects volatility patterns, only one lag, specifically lag 3, exceeds the designated threshold. This suggests that most of the variability in squared returns can be effectively captured by the model.
+
+## GARCH Forecast
+
+In the subsequent phase of the analysis, forecasting was conducted using the "ugarchforecast" function in R. This function, applied to the previously estimated GARCH model denoted as "garch_fit" enabled the generation of volatility forecasts for the forthcoming periods. By specifying "n.ahead = 10", the function projected volatility levels for the next 10 time periods. 
+
+```{r garc-forecast}
+forc = ugarchforecast(garch_fit, data = bank_return, n.ahead = 10)
+```
+
+```{r garch-pred-values, echo=F}
+forecast_values <- forc@forecast$seriesFor[, 1]
+standard_errors <- forc@forecast$sigmaFor[, 1]
+```
+
+```{r garch-interval, echo=F}
+z_95 <- qnorm(0.95)
+z_80 <- qnorm(0.80)
+prediction_interval_95 <- cbind(forecast_values - z_95 * standard_errors, forecast_values + z_95 * standard_errors)
+prediction_interval_80 <- cbind(forecast_values - z_80 * standard_errors, forecast_values + z_80 * standard_errors)
+
+```
+
+```{r garch-prediction-df, echo=F}
+colnames(prediction_interval_95) =  c('lower_95', 'upper_95')
+colnames(prediction_interval_80) =  c('lower_80', 'upper_80')
+garch_prediction=cbind(as.character(actual_series$Date[order(actual_series$Date)][2:11]), forecast_values, prediction_interval_95, prediction_interval_80)
+colnames(garch_prediction)[1:2] <- c('Date','bank_return')
+garch_prediction <- transform(garch_prediction, Forecast = rep('Yes', nrow(garch_prediction)))
+
+```
+
+```{r df-plot-garch-pred, echo=F}
+fin_data <- cbind( as.character(fin_series$Date[2:dim(fin_series)[1]]), as.numeric(bank_return[2:1019]))
+colnames(fin_data) <-  c('Date', 'bank_return')
+fin_data=as.data.frame(fin_data)
+fin_data$Date <- as.Date(fin_data$Date, format = "%Y-%m-%d")
+
+my_filter=fin_data$Date >= as.Date("2022-07-01") 
+plot_data_filtered=fin_data[my_filter,]
+
+plot_data_filtered$upper_80 = plot_data_filtered$lower_80 = 
+  plot_data_filtered$upper_95 =  plot_data_filtered$lower_95 = rep(NA, dim(plot_data_filtered)[1])
+
+plot_data_filtered <- transform(plot_data_filtered, Forecast = rep('No', nrow(plot_data_filtered)))
+
+plot_data_filtered_ord <- plot_data_filtered[order(plot_data_filtered$Date), ]
+garch_prediction$Date <- as.Date(garch_prediction$Date, format = "%d.%m.%Y")
+df_garch_forecast <- rbind(plot_data_filtered_ord, garch_prediction )
+
+```
+
+
+```{r garch-pred-plot, out.height='60%', out.width='60%', fig.align='center', fig.cap='Plot depicting the time series data starting from July 2022, with forecasted values shown in blue alongside 95 percent and 80 percent confidence intervals.', echo=F}
+
+data_ribbons=df_garch_forecast[!is.na(df_garch_forecast$upper_80),]
+df_garch_forecast$bank_return <- as.numeric(df_garch_forecast$bank_return)
+for (i in 3:6){
+  data_ribbons[,i]=as.numeric(data_ribbons[,i])
+}
+data_ribbons$bank_return <- as.numeric(data_ribbons$bank_return)
+
+
+ggplot(df_garch_forecast, aes(x = Date, y = bank_return, color = factor(Forecast))) +
+  geom_line(linewidth=1) +
+  geom_ribbon(data = data_ribbons, aes(x = Date, ymin = lower_80, ymax = upper_80), fill = "steelblue", alpha = 0.4, color = NA) +
+  geom_ribbon(data = data_ribbons, aes(x = Date, ymin = lower_95, ymax = upper_95), fill = "lightsteelblue3", alpha = 0.4, color = NA) +
+  scale_color_manual(values = c("black","midnightblue")) +  # Define colors for the lines
+  labs(title = "Ten-Step Ahead Forecast of Returns",
+       x = "Date",
+       y = "Values",
+       color = "Forecast") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10), 
+        legend.position = 'bottom')
+```
+
+In Figure , we present the log returns starting from July 2022 alongside 10 forecasted values. Additionally, confidence intervals at 80% and 95% are depicted. Notably, the forecasts appear to be conservative, as the values largely hover around the mean of the series without significant deviations. This cautious forecasting approach is further explored in *Figure \@ref(fig:plot-comparison-prediction-garch)*, where the actual values are represented in black and contrasted with the red predictions.
+
+```{r df-pred-comparison,  echo=F}
+
+garch_prediction$bank_return <- as.numeric(garch_prediction$bank_return)
+df_garch_forecast <- rbind(plot_data_filtered_ord, garch_prediction )
+
+last_eight <- tail(plot_data_filtered_ord,8)
+last_eight$bank_return <- as.numeric(last_eight$bank_return) 
+last_eight <- last_eight[,c(1:2)]
+
+new_bank_returns_100 <-  as.numeric(new_bank_return)[2:11]
+
+new_returns=data.frame('Date'=garch_prediction$Date,
+                       'bank_return'=new_bank_returns_100)
+
+predicted <- tail(df_garch_forecast,10)[,c(1:2)]
+
+df_plot <- rbind(last_eight, new_returns)
+df_plot$bank_return <-  as.numeric(df_plot$bank_return)
+
+```
+
+```{r plot-comparison-prediction-garch, out.height='60%', out.width='60%', fig.align='center', fig.cap='True returns from December 18th 2022 to January 16th 2023 are represented with predicted values from the new year overlaid in red.', echo=F}
+
+data_ribbons$bank_return <- as.numeric(data_ribbons$bank_return)
+predicted$bank_return <- as.numeric(predicted$bank_return)
+
+ggplot(df_plot, aes(x = Date, y = bank_return)) +
+  geom_point(size=3, aes(color='Actual values')) +
+  geom_line(linetype = "solid", aes(color='Actual values')) +
+  geom_point(data=predicted, aes(x=Date, y=bank_return, color='Forecast'),size=3)+
+  geom_line(data=predicted, aes(x=Date, y=bank_return,  color='Forecast'), linetype = "dashed")+
+  scale_color_manual(name = 'Lines',
+                     breaks = c('Actual values', 'Forecast'),
+                     labels = c('Actual values', 'Forecast'),
+                     values = c('Actual values' = 'black', 'Forecast' = 'red')) +
+  labs(title = "Ten-Step Ahead Forecast of Returns",
+       x = "Date",
+       y = "Values",
+       color = "Forecast") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10), 
+        legend.position = 'bottom')
+```
+
+# Comparison between the Models
+
+This analysis was aimed at modelling the Bank index using common time-series modelling approaches. The heteroskedastic GARCH (1, 1) model was proposed as improvement over the ARMA (3, 3) which adheres to the assumption of constant variance. 
+
+```{r fitted-comp, warning=F, message=FALSE, echo=FALSE, out.height="70%", out.width="90%", fig.align='center', fig.cap="Comparison of the fitted values for ARMA (3,3) and GARCH (1, 1) models"}
+combined_data <- data.frame(
+  dates = dates [2:1019],
+  arima = fit_ar,
+  garch = fit_garch
+)
+fitted_comp_plot <- ggplot(combined_data, aes(x = dates)) +
+    geom_line(aes(y = arima, color = "ARMA"), linetype = "solid", size = .8) +
+    geom_line(aes(y = garch, color = "GARCH"), linetype = "solid", size = .8) +
+    labs(x = "", y = "Values", title = "Fitted values") +
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        legend.position = "top",
+        axis.line = element_line(color = "black"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+        axis.text = element_text(color = "black"),
+        axis.title = element_text(color = "black")
+    ) +
+     # scale_x_date(breaks = seq(min(combined_data$dates), max(combined_data$dates), by = "4 months"), date_labels = "%b %Y") +
+    scale_y_continuous() +
+    scale_color_manual(name = "", values = c("ARMA" = "navyblue", "GARCH" = "darkred"))
+
+fitted_comp_plot
+```
+
+*Figure \@ref(fig:fitted-comp)* demonstrates the fitted values for both models, which provides a way to compare the results. It can be observed that ARMA (3, 3) model provided estimates which show larger variability, whereas in the GARCH, the estimated values are concentrated on a closer range. A possible reason for this could be that the GARCH model is tailored to volatility estimation, and the patterns present in the series could have proven to be too complex, whereas the ARMA model focuses only on the mean function, thus providing more flexibility.
+
+```{r model-comp, warning = F, message=FALSE, echo= F}
+arima_rmse <- round (sqrt (mean (res_ar ^ 2)), 5)
+garch_rmse <-  round (sqrt (mean (residuals (garch_fit) ^2)), 5)
+df_comparison_coefs <- data.frame("Names" =  c (c ("$\\mu$","$\\phi_1$", "$\\phi_2$", "$\\phi_3$", "$\\theta_1$", "$\\theta_2$", "$\\theta_3$", "$\\omega$", "$\\alpha_1$","$\\beta_1$"), "LogLik", "AIC", "BIC", "RMSE"), "ARMA (3, 3)" = c ("—", round (arima_fit$coef, 5), rep ("—", 3), round (arima_fit$loglik, 5), round (arima_fit$aic, 5), round (BIC(arima_fit), 5), arima_rmse), "GARCH (1,1)" = c (coef (garch_fit), likelihood (garch_fit), as.numeric (criteria_garch [1, 1]), as.numeric (criteria_garch [2, 1]),  garch_rmse))
+
+
+colnames_comp <-  c ("", "ARMA (3,3)", "GARCH (1,1)")
+
+better_one <- c (rep (F, 10), rep (T, 3), F)
+better_two <- c (rep (F,13), T)
+table_comp <- kable(df_comparison_coefs, digits = 5, col.names = colnames_comp, row.names = FALSE,  caption = "Results of model fitting, coefficient values and measures of fit", booktabs = T, align = "c", format = "latex", escape = F) %>%
+  column_spec(3, background = ifelse (better_one, "palegreentwo", "white")) %>%
+  column_spec(2, background = ifelse (better_two,  "palegreentwo","white")) %>%
+  column_spec(1, background = "lemon") %>%
+  row_spec(0, background = 'lemon') %>%
+  kable_styling(full_width = F) # %>%
+
+table_comp
+
+```
+*Table \@ref(tab:model-comp)* provides results of the Maximum Likelihood estimation, and allows to compare the results of model fitting for the two models considered in this analysis. To begin with, it stands out that the models suggest that, in the mean model, the influence of the autoregressive lag for $(t-1)$ and the $(t-2)$ lag in the moving average specification suggest the opposite direction of influence, whereas the values for other coefficients point in the same direction, with coefficients in the mean model for GARCH suggesting larger influence. Note that those parameters coincide with the parameters that were found not to be statistically significant according to the hypothesis testing [above](#fittingarima).For the GARCH (1,1) model, the parameter $\alpha_1$ corresponds to the ARCH (1) parameter and indicates positive influence of the lag of the squared return, and $\beta_1$ parameter corresponds to the $q = 1$ specification, indicating a stronger and positive relationship with the alg of the conditional variance. 
+
+
+With regard to the value of the (logarithm) of the likelihood-based criteria, such as Akaike and Bayesian information criteria, suggest that the GARCH (1,1) model provides a slightly better fit. This result can be attributed to the fact that the heteroskedastic model accounts for volatility clustering, thus capturing the information provided by the data more fully. However, it is important to note that the Root Mean Square error, which is defined as follows:
+$$ RMSE =  \sqrt{\sum_{t = g}^{n} \frac{(z_t - \hat{z}_t)^2}{n - g - 1}} ,$$
+suggests that ARMA (3, 3) demonstrates better performance in terms of the difference of the fitted values from the actual observations. This leads to the conclusion that introducing the model that accounts for heteroskedasticity did not provide sufficient improvement for the time series considered in this analysis. This might be attributed to the fact that ARCH and GARCH models have a tendency to respond to shocks observed in the series slowly, thus not allowing to obtain sufficient improvement over models with constant variance assumption for specific structures of the volatility (@tsay2014introduction, p.187). Further investigation of the nature of the volatility of the considered time series might provide better insight and lead to fitting a more appropriate model. 
+
+__Forecasting comparison__:
+
+```{r forecasting-comp, echo=F, warning=F, message=F }
+mse_garch <- mean(( forc@forecast$seriesFor- as.numeric(new_bank_return[2:11]))^2)
+mse_arima <- mean((tail(forecast_df,n_prediction)$value - new_bank_return[2:11])^2)
+
+rmse_garch <- round(sqrt(mse_garch),5)
+rmse_arima <- round(sqrt(mse_arima),5)
+
+comparison_forecast <- data.frame("ARMA (3,3)"=rmse_arima,"GARCH (1,1)"= rmse_garch)
+
+
+table_comp_forecasting <- kable(comparison_forecast, digits = 5,row.names = FALSE, format = "markdown", caption = "Forecasting RMSE for ARMA and GARCH model fitting.", booktabs = F, align = "c") %>%
+  row_spec(0, background = 'lemon') %>%
+  kable_styling(full_width = FALSE) # %>%
+
+table_comp_forecasting
+
+```
+
+
+As depicted in *Table \@ref(tab:forecasting-comp)*, the GARCH model fitting demonstrates superior performance in terms of root mean square error. This outcome underscores the effectiveness of the GARCH model in capturing the underlying volatility dynamics of the financial time series data, thereby enhancing the accuracy of the forecasting process.
+
+
+# References
