@@ -1,11 +1,13 @@
 # Corra_projects
 
-This GitHub repository is designed to showcase four distinct projects:
+This GitHub repository is designed to showcase six distinct projects:
 
 1. [Named Entity Recognition](./Named%20Entity%20Recognition/)
 2. [Image captioning](./Image%20Captioning/)
 3. [Digit recognition](./Digit%20Recognition/)
 4. [Bayesian hierarchical model: mortality risk](./Bayesian%20hierarchical%20model/)
+5. [Garch - Time series Analysis](./Research%20Projects/Garch%20-%20Time%20Series%20Analysis/)
+6. [ARMS - Adaptive Rejection Metropolis Sampling](./Research%20Projects/Garch%20-%20Time%20Series%20Analysis/) 
 
 ## Named Entity Recognition 
 
@@ -55,6 +57,14 @@ The research aims at applying Bayesian Hierarchical methodology for meta-analysi
 Repository for final project in Bayesian Modelling course for Data Analytics for Business MSc course in Università Cattolica del Sacro Cuore (Milan, Italy). Project completed by Corrà Sara and Shaboian Goar.
 
 In the context of the project, reference is made to the following scientific paper: Yusuf, S., Peto, R., Lewis, J., Collins, R., & Sleight, P. (1985). Beta blockade during and after myocardial infarction: An overview of the randomized trials. Progress in Cardiovascular Disease.
+
+## Time Series Analysis 
+
+The repository offers a detailed exploration of univariate financial time series, with a specific focus on the FTSE Italy All Share Banks index. 
+
+<img src="Research%20Projects/Garch%20-%20Time%20Series%20Analysis/image/plot.png" alt="Time_series" width="50%">
+
+The analysis encompasses a wide range of aspects, including volatility patterns, data distribution, data transformation, visual representation of significant market events, and the application of GARCH models. Through preliminary data analysis, the distribution of the data is examined using histograms and boxplots, while data transformation techniques are utilized to analyze returns rather than prices. Visual analysis provides insights into the behavior of the series over time, highlighting key market events such as the Covid-19 outbreak and the Ukraine invasion. Additionally, the analysis includes the implementation of GARCH models to capture and predict changing volatility patterns inherent in financial returns data. By combining traditional time series analysis with advanced modeling techniques like GARCH, this repository aims to offer a comprehensive understanding of the dynamics of financial markets and the tools available for forecasting future trends.
 
 
 
