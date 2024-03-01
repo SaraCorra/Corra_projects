@@ -1,0 +1,643 @@
+---
+title: "Adaptive Rejection Metropolis Sampling"
+author: "Corrà Sara (5206191), Shaboian Goar (5217162)"
+date: "2023-06-23"
+output: 
+  officedown::rdocx_document
+always_allow_html: true
+bibliography: bibliography.bib
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library (bookdown)
+library (officedown)
+library (ggplot2)
+library (coda)
+library (patchwork)
+library (knitr)
+library (kableExtra)
+library (mcmcse)
+library (armspp)
+```
+
+# Problem statement
+<<<<<<< HEAD:Corra, Shaboian.Rmd
+In computational statistics, it becomes increasingly important to develop sophisticated algorithms that enable addressing issues arising from complex statistical models. Where numerical algorithms fail to yield the necessary result, researchers often turn to approximation algorithms, such as Monte Carlo methods and Markov chains.  Pharmacokinetics is a scientific field where addressing complex models is particularly prevalent. It aims at studying how certain drugs are absorbed, distributed and eliminated from the bodies of patients. Due to the considerable number of factors influencing this problem, and the overwhelming presence of noise and measurement error, researchers oftentimes encounter statistical models which are not straightforward to work with. Such situation arose in  @gilks1995adaptive, where, to determine the appropriate dosage of gentamicin for newborns treated for infections, the concentration y_{ij} of gentamicin in the blood flow was modelled as follows:
+
+In computational statistics problems, it becomes increasingly important to develop sophisticated algorithms that enable addressing issues arising from complex statistical models.Where numerical algorithms fail to yield the necessary result for statistical analysis, researchers often turn to approximation algorithms, such as Monte Carlo methods and Markov chains. Pharmacokineticks is a scientific field where addressing complex models is particularly prevalent. Pharmacokineticks is a scientific field where addressing complex models is particularly prevalent. It aims at studying how certain drugs are absorbed, distributed and eliminated from the bodies of patients. Due to the considerable amount of factors influencing this problem, and the overwhelming presence of noise and measurement error in pharmacokinetic data, researcher oftentimes encounter statistical models which are not straighforward to work with. Such situation arose in @gilks1995adaptive, where, to determine the appropriate dosage of gentamicin for new-borns treated for infections, the concentration $y_{ij}$ of gentamicin in the blood flow was modelled as follows:
+
+$$ log \ Z_{ij} = log \ E \ [z_{ij} \ \vert \ V_i, C_i] + \epsilon_{ij}, \  where $$
+
+$$ z_{ij}=log\left(y_{ij}\right),$$
+
+$$ E \ [z_{ij}] = log [\sum_{l: \ t_{ij} > s_{il}} \frac{d_{il}}{V_i} \ exp \{- \frac {C_{ij}}{V_i} \ (t_{ij}-s) \},  $$
+
+In this framework, $C_i$, $V_i$ and $\epsilon$ are random quantities that are estimated in their turn, with vague prior distributions assigned to the parameters. 
+
+The complicated nature of the model in the Bayesian setting resulted in non-log-concave nature of full conditional densities, sampling from which was necessary to perform posterior inference. Thus, researchers had to adapt appropriate methodology: as will be shown below, standard methods fail in approximating non-log-concave densities. For that reason, Adaptive Rejection Sampling algorithm (ARMS) was introduced: the detailed methodology and examples of implementation are described in this report.
+
+# Rejection sampling
+
+Rejection sampling involves sampling from an easier distribution and adjusting the probability by randomly discarding candidates. The objective is to obtain a sample conforming to the target distribution f(x), which can be only known up to a multiplicative constant. It will be sufficient to sample from an alternative, widely recognized distribution, and subsequently retain solely those values that adhere to the condition (@robert1999monte):
+
+$$
+u<\frac{f(y)}{\alpha g(y)}
+$$
+
+As an illustrative example,  in *Figure \@ref(fig:rej-sampling)* a potential envelope $\alpha g(y)$ is presented, subsequently denoted as $h(x;\alpha)$ for the density function of a Gamma distribution with a shape parameter of 8 and a rate parameter of 1.
+
+```{r rej-sampling, echo=FALSE, out.height='60%', out.width='60%', fig.cap='Chi-squared envelope for a Gamma distribution', fig.align='center', warning=FALSE, message=FALSE}
+x <- seq(0, 40, length.out = 1000)
+
+alpha <- optimize(f=function(x){dgamma(x,8,1)/dchisq(x,8.5)},maximum=T, interval=c(7,15))$objective
+
+df <- data.frame(
+  x = x,
+  dchisq = alpha*dchisq(x,8.5),
+  dgamma = dgamma(x, shape =8, rate = 1)
+)
+
+ggplot(df, aes(x = x)) +
+  geom_line(aes(y = dchisq, col='Chi-Squared'), size=1.2) +
+  geom_line(aes(y = dgamma, col='Gamma'), size=1.2) +
+  geom_ribbon(aes(ymin = dchisq, ymax = dgamma), fill = "lightblue", 
+              alpha = 0.5) +
+  geom_ribbon(data = subset(df, x >= 0 & x <= 40),
+  aes(ymin = 0, ymax = dgamma), fill = "white",alpha = 0.5) +
+  labs(title = "Envelope", x = "x", y = "Density") +
+  theme_minimal() +
+  xlim(0,25)+
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        legend.position = "bottom") +
+  scale_color_manual(name='Distributions',
+                     values=c('Chi-Squared'='blue',
+                              'Gamma'='red'))
+
+```
+As mentioned earlier, the decision to accept a particular value is based on the ratio  $\frac{f(y)}{\alpha g(y)}$, which, in the given example, can be expressed as follow:
+$$
+\frac{\frac{b^a}{\Gamma(a)}*x^{a-1}*exp\{-bx\}}{ \alpha*\frac{1}{2^{k/2}\Gamma(k/2)}x^{k/2-1}e^{-x/2}} =\frac{dGamma \ (x \  \vert \  \alpha = 8, \ \beta = 1)}{\alpha* dChisq(x \ \vert \ k=8.5)}
+$$
+
+The parameter $\alpha$ is chosen to be equal to 1.406434 so that the condition $\alpha^*=\frac{f(x)}{g(x)}$ is satisfied and the divergence between the two density lines can reach its minimum.
+Furthermore, the envelope distribution possesses thicker tails compared to the target distribution in order to ensure comprehensive coverage of the Gamma function across all points.
+
+## Squeezing function
+
+The *Squeeze principle* was proposed by @marsaglia1977squeeze. It states that for s to be a suitable squeezing function, s(x) must not exceed f(x) anywhere on the support of f. The incorporation of this additional function leads to a decrease in the number of evaluations required for f. This arises from the algorithm now incorporating two distinct stages. Firstly, a value is accepted if it falls below the Squeezing function. Only when this condition is not satisfied it becomes necessary to evaluate the function in that point to assess whether the sample value falls under the desired curve (thus is accepted) or not. The proportion of iterations in which evaluation of f is avoided is (@givens2012computational):
+$$ \frac {\int s(x) dx}{\int e(x) dx} $$
+Furthermore, while the squeezing function always possesses a bounded support, the same cannot be said for the envelope line.
+
+# Adaptive rejection sampling
+
+Adaptive Rejection sampling approach was introduced by Gilks and Wild (@gilks1992adaptive) to decrease the proportion of rejections.It achieves this by simultaneously refining the envelope and squeezing function during the generation of sample draws.
+
+$$
+s(x)\leq f(x)\leq h(x)
+$$
+Two available alternatives for the possible envelope stricture encompass the tangent and secant method. For the purpose of this discussion, the focus will be on the secant procedure, which, using secants lines, avoids the need for the specification of derivatives (@gilks1992adaptive). Nevertheless, it is important to acknowledge that this advantage comes at the cost of reduced algorithm efficiency.
+By leveraging the property that any concave function can be bounded both from above and below by its secants and chords, the Adaptive Rejection Sampling (ARS) method diminishes the need for time-consuming optimization by reducing the number of function evaluations of the target density  (@meyer2008adaptive).  In this framework, log-concavity is defined as follows:
+
+$$
+ln\ f(a) -2ln\ f(b)+ln\ f(c)<0, \ \ \ \ \ \ \ \ \forall\ a,b,c \in D; \ \ a<b<a
+$$
+Fortunately, there is a wide range of functions that are not log-concave, making them suitable for the application of the ARS method.
+
+### Function definitions
+
+Let $S_n=\{x_i;\ i=0, ...,n+1\}$ define a current set of abscissae in
+ascending order. Then, for $1 \leq i \leq j \leq n$ let $L_{ij}(x;S_n)$
+denote the straight line through points $[x_i,Inf(x_i)]$ and $[x_j,Inf(x_j)]$; for other (i,j) let $L_{ij}(x;S_n)$ be undefined (@gilks1995adaptive)[^Refer to this paper for the algorithm specification].
+
+Consequently, the piecewise linear function $h_n(x)$ may be specified as:
+
+$$
+h_n(x)=min[L_{i-1,i}(x;S_n),\ L_{i+1,i+2}(x;S_n)] \ \ \ \ \ \ \ \ x_i\leq x < x_{i+1}
+$$ 
+Rejection sampling can be performed with the sampling distribution
+given by:
+
+$$
+g_n(x)=\frac{1}{m_n}exp\ h_n(x)
+$$
+$$
+m_n=\int exp\ h_n(x)\ dx
+$$
+where $m_n$ is the normalizing constant of the piecewise exponential distribution.
+
+It follows that the rejection envelope can be identified as an exponential linear function which allows for efficient sampling of values via inversion (@devroye2006nonuniform).
+Moreover,  it can be stated that since each accepted draw is made using a rejection sampling approach, the draws are an independent and identically distributed sample precisely from target distribution f.
+
+An interesting feature of this algorithm is that the set $S_n$ is only updated when $f(x)$ has been previously computed. As the algorithm produces variables $X \sim f(x)$, the envelope and squeezing function become increasingly accurate and, therefore, we progressively the number of evaluations of f are reduced. Also, only rejected samples have previously necessitated a target function evaluation, accepted points may have been accepted through the evaluation of the squeezing function. This method will therefore be useful in situations where the evaluation of f(x) is computationally expensive.
+
+## Envelope updating
+
+```{r echo=FALSE, fig.align='center', out.height='65%', out.width='65%', fig.cap='Envelope and squeezing function with 7 and 8 points in S'}
+# Gamma function with shape and rate parameter set
+g=function(x, shape=12, rate= 0.6){
+  log(dgamma(x,shape,rate))
+}
+
+x=seq(0.00001,38,by=0.001)
+s=seq(0.00001,38,length.out=7) 
+
+both.lines=function(s,i,x){
+  a1=c(s[i-1],s[i])
+  a2=c(g(s[i-1]),g(s[i]))
+  b1=c(s[i+1],s[i+2])
+  b2=c(g(s[i+1]),g(s[i+2]))
+  slope.a <- diff(a2) / diff(a1)
+  slope.b <- diff(b2) / diff(b1)
+  intercept.a <- a2[1] - slope.a * a1[1]
+  intercept.b <- b2[1] - slope.b * b1[1]
+  line.1=intercept.a+x*slope.a
+  line.2=intercept.b+x*slope.b
+  triangle.lines=pmin(line.1, line.2) # pairwise comparison of the two lines
+  
+  return(triangle.lines)
+}
+
+line.left=function(s,i,x){
+  b1=c(s[i],s[i+1])
+  b2=c(g(s[i]),g(s[i+1]))
+  slope.b <- diff(b2) / diff(b1)
+  intercept.b <- b2[1] - slope.b * b1[1]
+  line.2=intercept.b+x*slope.b
+  return(line.2)
+}
+
+line.right=function(s,i,x){
+  b1=c(s[i],s[i+1])
+  b2=c(g(s[i]),g(s[i+1]))
+  slope.b <- diff(b2) / diff(b1)
+  intercept.b <- b2[1] - slope.b * b1[1]
+  line.2=intercept.b+x*slope.b
+  return(line.2)
+}
+
+```
+
+```{r echo=FALSE}
+f.envelope = function(x, s) {
+  i=2
+  y = (x < s[2]) * line.left(s, 2, x) # defining the last left line in the correct support
+  while (i<=length(s)-2){
+    y= y + (x >= s[i] & x < s[i+1]) * both.lines(s, i, x)
+    i=i+1
+  } 
+  y=y+(x >= s[i]) * line.right(s, i-1, x)
+  return(y)
+}
+```
+
+```{r envelope-update, echo=FALSE, fig.align='center', fig.height=4.5, fig.width=8.5, fig.cap='Envelope and squeezing function with 7 and 8 points in S'}
+s=seq(0.00001,38,length.out=7) # defined sequence
+fun.envelope=f.envelope(x,s) # created envelope for a given S
+
+data=data.frame(x=c(s[1],s[1:6]), y=c(-11.4,g(s[1:6])),
+                xend=c(s[1:6],s[6]), yend=c(g(s[1:6]),-11.4))
+# Squeezing starting and end points
+
+env.1=ggplot() +
+  geom_line(data = data.frame(x = x, y = fun.envelope),
+            aes(x = x, y = y), color = "slateblue4", linewidth = 1.5) +
+  geom_line(data = data.frame(x = x, y = g(x)), aes(x = x, y = y),
+            color = "black", size = 1) +
+  geom_point(data=data.frame(s=s[2:6]),
+             aes(x=s,y = -11.4), col='slateblue4', size = 3) +
+  geom_segment(data = data, aes(x = x, y = y, xend = xend, yend = yend),
+               linetype = "dashed")+
+  geom_ribbon(data = data.frame(x = x, y = fun.envelope),
+              aes(x = x, ymin = y, ymax = g(x)), fill = "slateblue1", alpha = 0.3) +
+  geom_ribbon(data = data.frame(x = x, y = fun.envelope),
+              aes(x = x, ymin =-12, ymax = g(x)), fill = "gray80", alpha = 0.3) +
+  labs(title = "Envelope, n=5",  y = '') +
+  coord_cartesian(ylim = c(-11, -1), xlim = c(0, 38)) +
+  theme_bw() +
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5))+
+  scale_x_continuous(name='Values', breaks=round(s[1:6],2))
+
+######### UPDATE #############
+
+s2 <- c (s[1:2], 9.2, s [3:7])
+# included a value in the sequence
+fun2.envelope=f.envelope(x,s2)
+
+data=data.frame(x=c(s2[1],s2[1:7]), y=c(-11.4,g(s2[1:7])),
+                xend=c(s2[1:7],s2[7]), yend=c(g(s2[1:7]),-11.4))
+
+env.2=ggplot() +
+  geom_line(data = data.frame(x = x, y = fun2.envelope),
+            aes(x = x, y = y), color = "slateblue4", linewidth = 1.5) +
+  geom_line(data = data.frame(x = x, y = g(x)), aes(x = x, y = y),
+            color = "black", size = 1) +
+  geom_point(data=data.frame(s=s2[2:7]),
+             aes(x=s,y = -11.4), col='slateblue4', size = 3) +
+  geom_segment(data = data, aes(x = x, y = y, xend = xend, yend = yend),
+               linetype = "dashed")+
+  geom_ribbon(data = data.frame(x = x, y = fun2.envelope),
+              aes(x = x, ymin = y, ymax = g(x)), fill = "slateblue1", alpha = 0.3) +
+  geom_ribbon(data = data.frame(x = x, y = fun2.envelope),
+              aes(x = x, ymin =-12, ymax = g(x)), fill = "grey80", alpha = 0.3) +
+  labs(title = "Envelope, n=6", x = 'Values', y = '') +
+  coord_cartesian(ylim = c(-11, -1), xlim = c(0, 38)) +
+  theme_bw() +
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5))+
+  scale_x_continuous(name='Values', breaks=round(s2[1:7],2))
+
+env.1+env.2
+```
+
+The plot presented in *Figure \@ref(fig:envelope-update)* displays the
+progression of the envelope and squeezing function following the addition of a single value to the sequence in $S_n$. It is important to note that, in the first plot, for illustrative purposes, all points are assumed to be equidistant.
+
+In general, one would prefer the grid ($S_n$) to be most dense in regions where f(x) is largest,thus near the mode of f.
+Fortunately, this happens automatically, since such points are most likely to be kept in subsequent iterations and included in updates to $S_n$. 
+
+# Gamma sampling with ARS
+
+For computations, the armspp package in R was used ^[Implements the code used by Gilk for research on Wally R. Gilks, Best, and Tan (1995). C++ code was adapted to R using Rcpp by Michael Bertolacci (@armspp)]. The function arms takes as input the logarithm of the kernel density. In this case, the following holds:
+
+$$
+log\ f(x) \propto (a-1)log(x)-bx=(8-1)log(x)-x
+$$ 
+For this particular example, we have followed the recommended practice from Gilks et al. (@gilks1995adaptive) by employing four starting abscissae. This approach is typically beneficial, unless the density exhibits an exceptionally high level of concentration.
+
+Moreover, it crucial to verify that if the support of f extend to $- \infty$, the lower value of the set $S_n$, namely $x_0$, must be chosen such that $\ell'(x_0)>0$ where $\ell=log f(x)$. Similary, if the support of f extends to $\infty$, $x_{n+1}$ must be chosen such that $\ell'(x_0)<0$. As a result, the extreme values of the set $S_n$ evaluated at $\ell$ will inevitably lie before and after the mode of the distribution.
+
+```{r, echo=FALSE}
+set.seed(3344)
+output <- arms(
+  3000, function(x) 7*log(x)-x,
+  0.0000000001, 5000, n_initial = 4,
+  metropolis = FALSE, include_n_evaluations = TRUE
+)
+```
+
+```{r echo=FALSE}
+b=1
+a=8
+k=8.5
+alpha=1.406434 
+n=3000
+set.seed(444)
+x=rchisq(n,8.5)
+u=runif(n)
+
+keep=(u <= dgamma(x,a,b)/(alpha*dchisq(x,k)))
+sample.gamma=x[keep]
+```
+
+## Comparison of empirical distirbutions
+
+In *Figure \@ref(fig:gamma-sample)* we can notice the approximation of the two rejection method to the theoretical Gamma distribution. Notably, both lines closely track the actual density line. Hence, the disparity between the two methods becomes most pronounced when assessing their respective efficiencies within the algorithm.
+
+```{r gamma-sample, echo=FALSE, fig.align='center', fig.width=5.5, fig.height=3, warning=FALSE, message=FALSE, fig.cap='Comparison of empirical distributions, histogram refers to the ars sample'}
+
+df=as.data.frame(output)
+
+ggplot(df, aes(x = samples)) +
+  geom_histogram(aes(y = ..density..), binwidth = 1, color = "white", fill = "antiquewhite2", alpha = 0.5) + 
+  geom_density(aes(y = ..density.., col='ARS'), lwd = 1) +
+  geom_density(data = data.frame(x = sample.gamma),
+               aes(x = x, y = ..density.., col='AR'),lwd=1) +
+  stat_function(fun = dgamma, args = list(shape = 12, rate = 0.6),
+                aes(col='Gamma function'),lwd = 1, linetype='dashed') +
+  xlim(0, 48) +
+  labs(x = "Values", y = 'Relative Frequencies', title = "Gamma samples") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        legend.position = 'bottom')+
+  scale_color_manual(name='Methods',
+                     values=c('Gamma function'='dodgerblue4',
+                              'ARS'='chocolate4',
+                              'AR'='gold3'))+
+  guides(color = guide_legend(override.aes = list(linetype = c('solid', 'solid', 'solid'))))
+```
+
+# Adjustment of initial values
+
+In *Figure \@ref(fig:comparison)*, a graphical comparison of two distinct scenarios is presented. The number of evaluations of the target density, which serves as a measure of algorithm efficiency, is represented by both lines. The disparity between the two lines stems from the utilization of different approaches. The blue line corresponds to equidistant starting abscissae, while the red line represents the condition where the initial x-values are adapted to conform to the shape of the target distribution, selected through appropriate quantiles.
+
+The outcomes reveal that opting for suitable starting abscissae consistently leads to a lower number of evaluations. However, it is important to note that there is a considerable level of uncertainty associated with this observation.
+
+```{r echo=FALSE}
+arms_function <- function(n) {
+  output=arms(
+  4000, function(x) 11*log(x)-0.6*x,
+  0.0000000001, 5000,  n_initial=n,
+  metropolis = FALSE, include_n_evaluations = TRUE
+)
+  return(output$n_evaluations)
+} # defined a function which returns just the number of evaluations of the 
+# target function required
+
+set.seed(123)
+rep_n_eval=replicate(1000, sapply(3:12, function(x) arms_function(x)))
+mean_n=rowMeans(rep_n_eval)
+sd_n=apply(rep_n_eval,1,sd)
+
+estrInf=0.30
+estrSup=0.70
+c=0.03
+quantile=list()
+for (i in 3:12){
+  quantile[[i-2]]=seq(estrInf,estrSup,length.out=i)
+  i=i+1
+  estrInf=estrInf-c
+  estrSup=estrSup+c
+}
+gamma.quantile=sapply(quantile, function(x) qgamma(x,12,0.6))
+
+
+arms_quantile <- function(val) {
+  output=arms(
+    4000, function(x) 11*log(x)-0.6*x,
+    0.0000000001, 5000,  initial=val,
+    metropolis = FALSE, include_n_evaluations = TRUE
+  )
+  return(output$n_evaluations)
+}
+
+n_eval_quant=sapply(gamma.quantile, function (x)
+  arms_quantile(x)
+  )
+set.seed(123456)
+rep_n_eval.quant=replicate(1000, sapply(gamma.quantile, function (x)
+  arms_quantile(x)
+))
+mean_n_quant=rowMeans(rep_n_eval.quant)
+sd_n_quant=apply(rep_n_eval.quant,1,sd)
+```
+
+```{r comparison, echo=FALSE, fig.align='center', out.height='40%', out.width='40%', message=FALSE, warning=FALSE, fig.cap='Comparison of the number of evaluations of the target distribution. The blue line represents equidistant starting abscissae; the red line is associated with adapted starting values '}
+x_values=3:12
+df <- data.frame(x = x_values, mean_n_quant = mean_n_quant, mean_n = mean_n,
+                 quant_upper=mean_n_quant+sd_n_quant,
+                 quant_lower=mean_n_quant-sd_n_quant,
+                 lower=mean_n-sd_n,
+                 upper=mean_n+sd_n)
+
+ggplot(df, aes(x = x)) +
+  geom_line(aes(y = mean_n_quant, col='Adjusted'), size=1.2) +
+  geom_point(aes(y = mean_n_quant, col = 'Adjusted'), size = 3) +
+  geom_ribbon(aes(x=x,ymin = quant_lower,ymax=quant_upper),fill = "rosybrown1",alpha=.2)+
+  geom_line(aes(y = mean_n, col='Default'),size=1.2) +
+  geom_point(aes(y = mean_n, col = 'Default'), size = 3) +
+  geom_ribbon(aes(x=x,ymin = lower,ymax=upper),fill = "slategray1",alpha=.2)+
+  ylim(118, 160) +
+  labs(title = "Setting initial values", 
+       y = "Number of evaluations of f(x)", x='Values') +
+  theme_bw()+
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        legend.position = "bottom")+
+  scale_color_manual(name='Initial values',
+                     values=c('Default'='darkslategrey',
+                              'Adjusted'='darkred'))+
+  scale_x_continuous(breaks=1:12)
+```
+
+# Sampling methods for complex distributions
+
+Markov Chain Monte Carlo algorithms provide tools for drawing inference from vague distributions, for which importance or rejection sampling cannot be applied  (@gelman1993iterative). The increase in the power of the sampling framework comes at the expense of the independence of the elements in the chain: by construction, Markov Chain algorithms produce a sample in which each value only on its current state.
+
+Metropolis-Hastings sampling is a Markov Chain Monte Carlo algorithm used for tackling high-dimensional parameter vectors by reducing the framework to a sequential sampling from univariate distributions for each component, especially for cases where sampling directly from the target distribution is not feasible (@efron2013computer, p. 252). To achieve that, a proposal distribution is used to draw samples for target parameters. In the framework of this analysis, this property is of great importance, since Metropolis-Hastings allows to approximate non-log-concave distributions. The decision on whether to accept or reject the new X is determined by the acceptance ratio, which illustrates the difference in the values for the density for the current state and the new proposed state:
+
+$$ r = \frac{f(X) \ q (x_i \ \vert \ X)}{f(x_i) \ q (X \ \vert \ x_i)}$$
+The ratio of proposals within the acceptance ratio provides that, if a certain value has a higher probability of being included, the probability would be downweighed to prevent bias in the sample (@hoff2009first, p.183). A special case of the Metropolis-Hastings is the Gibbs sampling algorithm.  
+
+However, when sampling multiple parameters from complex density distributions, one instance being non-log-concave densities, the frequent occurrence of rejections at the Metropolis-Hastings step leads to increased computational burden and slow convergence rate. To address this issue, the addition of an adaptive rejection step is proposed to ensure that, for certain values of X sampled from the piecewise exponential distribution, a rejection at the ARS step will adapt the envelope to closer approximate the target distribution, thus guaranteeing faster convergence. The proposed algorithm combines Adaptive Rejection sampling with a Metropolis-Hastings step (ARMS), and is defined as follows:
+<-> Externally created table for ARMS algorithm <->
+
+The algorithm described above is applicable to ARMS-within-Gibbs sampling, where the conditioning on other variables being sampled is notationally suppressed. It can be discerned that, in case the density for one of the parameters is log-concave, the Metropolis-Hastings rejection step would always result in “accept” decision, effectively transforming the algorithm into a simple Adaptive Rejection sampling.
+
+For Gibbs and Metropolis-Hasting sampling it can be stated that they are almost always theoretically convergent (@robert2010introducing, p. 170), if the proposal distribution meets certain requirements. However, the time required for the convergence to be achieved might be very lengthy: hence, to increase the efficiency, the adaptive-rejection step is introduced. In the ARMS framework, $h_n (x)$ is not strictly an envelope of $log \ (f \ (x))$, due to non log-concavity of the target distribution. The proposal distribution is then set as $q \ (x \vert X_{cur}, \  S_N) \  \propto \ min \{f \ (x), \ exp (h_n \ (x))\}$, where $S_N$ are regarded as auxilliary variables (@besag1993spatial, p. 30) which provides a good way to downweigh sampled values that have a lower probability of rejection by the ARS step.
+
+```{r arms-envelope-creation, warning=FALSE, message=FALSE, echo=FALSE, eval=FALSE}
+a=10; b=0.8; c=47; d=1.5
+
+g=function(x, a=10, b= 0.8, c=47, d=1.5){
+  mixt<- 0.7*dgamma(x,a,b)+0.3*dgamma(x,c,d)
+  return(log(mixt))
+}
+
+both.lines=function(s,i,x){
+  a1=c(s[i-1],s[i])
+  a2=c(g(s[i-1]),g(s[i]))
+  b1=c(s[i+1],s[i+2])
+  b2=c(g(s[i+1]),g(s[i+2]))
+  c1=c(s[i],s[i+1])
+  c2=c(g(s[i]),g(s[i+1]))
+  slope.a <- diff(a2) / diff(a1)
+  slope.b <- diff(b2) / diff(b1)
+  slope.c <- diff(c2) / diff(c1)
+  intercept.a <- a2[1] - slope.a * a1[1]
+  intercept.b <- b2[1] - slope.b * b1[1]
+  intercept.c <- c2[1] - slope.c * c1[1]
+  line.1=intercept.a+x*slope.a
+  line.2=intercept.b+x*slope.b
+  line.3=intercept.c+x*slope.c
+  triangle.lines=pmin(line.1, line.2)
+  triangle.lines=pmax(line.3,triangle.lines)
+  
+  return(triangle.lines)
+}
+
+
+  ######### CREATE ENVELOPE FUNCTION  #########
+
+x=seq(0.00001,45,by=0.001)
+s=c(0.00001,5,7.5,12,16,22,30,37,45)
+fun.envelope=f.envelope(x,s)
+saveRDS (fun.envelope, "arms_envelope.RDS")
+```
+
+
+```{r arms-envelope, warning=FALSE, message=FALSE, echo=FALSE, fig.align='center', fig.cap= "Envelope for ARMS, 7 starting abscissae", fig.height=3.5, fig.width=7, fig.align='center'}
+g <- function(x, a=10, b= 0.8, c=47, d=1.5){
+  mixt<- 0.7*dgamma(x,a,b)+0.3*dgamma(x,c,d)
+  return(log(mixt))
+}
+
+x=seq(0.00001,45,by=0.001)
+s=c(0.00001,5,7.5,12,16,22,30,37,45)
+fun.envelope <- readRDS ("arms_envelope.RDS")
+
+arms_env <- ggplot() +
+    geom_line(data = data.frame(x = x, y = fun.envelope),
+              aes(x = x, y = y), color = "slateblue4", linewidth = 1) +
+    geom_line(data = data.frame(x = x, y = g(x)), aes(x = x, y = y),
+              color = "black", size = 1) +
+    geom_point(data=data.frame(s=s[2:8]),
+               aes(x=s,y = -5.12), col='slateblue4', size = 3) +
+    geom_ribbon(data = data.frame(x = x, y = fun.envelope),
+                aes(x = x, ymin = y, ymax = g(x)), fill = "slateblue1", alpha = 0.3) +
+    geom_ribbon(data = data.frame(x = x, y = fun.envelope),
+                aes(x = x, ymin =-12, ymax = g(x)), fill = "gray80", alpha = 0.3) +
+    labs(title = "Envelope",  y = 'log f (x)') +
+    coord_cartesian(ylim = c(-5, -2)) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))+
+    scale_x_continuous(name='Values', breaks=round(s[1:8],2))
+
+arms_env
+```
+The squeezing function is not utilized due to non-log-concavity of the target distribution. It should be stressed that the abscissae chosen for constructing the envelope are not dependent on the value for the current state of the chain: hence, no dependency on the envelope is observed in the right-hand side of the definition for the proposal. This indicates that this yields an independence chain, which is irreducible and aperiodic if  $ g \ (x) >0 \ where \ f \ (x)>0$ (@givens2012computational, p.204). The dependence on the current state enters in the Metropolis-Hastings step, where the decision is made based on the acceptance ratio, which incorporates the value for the proposal and the density of the current state. This is confirmed by the fact that the Markov transition function $(X_M \ \vert \ X_{cur} \ ,S_N )$, which allows to construct the detailed balance equation:
+$$ f\left(X_{cur}\right)\;P\left(X_M\;|\;X_{cur},\;S_N\right)=f\left(X_M\right)\;P\left(X_{cur}\;|\;X_M,\;S_N\right), $$
+The sampling method allows to obtain $X_m$, a sample from full conditional of x, thus preserving the stationarity distribution of the chain.
+
+ARMS was applied to a simulated gamma mixture which has non-log-concave density. To demonstrate the gain provided by introducing the adaptive rejection step, the standard Metropolis-Hastings was applied first, along with the ARMS (using armspp package in R). The analyzed distribution is a Gamma mixture with two mixture components, with probability density function defined as follows:
+$$f (x) = 0.3 \ dGamma \ (x \  ; \  \alpha = 10, \ \beta = 0.8) + 0.7 \ dGamma \ (x \  ; \  \alpha = 47, \ \beta = 1.5)$$
+This distribution has a non-log-concave density, thus it is expected that appending and Adaption Rejection step would improve the performance of the algorithm compared to a standard Metropolis-Hastings algorithm. 
+
+As proposal distribution for Metropolis algorithm, a symmetric normal distribution centered around the current state of the variable was chosen in order to partially account for the asymmetry of the target distribution. For ARMS, six initial points were chosen, using 5%, 30%, 45%, 55%, 70% and 95% centiles of the previous chain, in accordance with methodology devised by Gilk. For each algorithm, 5000 values were sampled, and the results of the approximation are presented below. 
+
+```{r arms-met-work, message=FALSE, warning=FALSE, echo=FALSE, eval=FALSE}
+g = function(x, a=10, b= 0.8, c=47, d=1.5) {
+  mixt <- 0.7*dgamma(x,shape=a, rate=b)+0.3*dgamma(x,shape=c, rate=d)
+  return (mixt)
+}
+
+proposal= function(current) {
+  rnorm(1, current,15)
+}
+
+sample=c()
+
+metropolis= function(x,S) {
+sample=c()
+for(s in 1:S){
+  
+  x.star = proposal(current=x)
+  g(x.star)/g(x)
+  
+  ratio=min(1, g(x.star)/g(x))
+  
+  u = runif(1)
+  
+  if(u < ratio){x = x.star}
+  sample[s] = x
+  }
+return(sample)
+}
+
+set.seed(123)
+sample_metropolis <- metropolis(25,5000)
+saveRDS (sample_metropolis, "sample_metropolis.RDS")
+
+################
+log_mixture = function(x) {
+  parts = log(c(0.7, 0.3)) + dgamma(x,shape=c(a,c), rate=c(b,d), log=TRUE)
+  mixt <- log(sum(exp(parts - max(parts)))) + max(parts)
+  return (mixt)
+}
+
+set.seed (123)
+sample_arms <- arms(5000, log_mixture,
+         0.0000000001, 5000, n_initial=4,
+         metropolis = TRUE, include_n_evaluations = TRUE)
+centiles <- c(0.05, 0.3, 0.45, 0.55, 0.7, 0.95)
+result <- quantile(sample_arms$samples, centiles)
+
+set.seed (123)
+sample_arms <- arms (5000, log_mixture,
+         0.0000000001, 5000, initial = result,
+         metropolis = TRUE, include_n_evaluations = TRUE)
+
+saveRDS(sample_arms, "sample_arms.RDS")
+
+```
+
+
+```{r arms-met, warning=FALSE, message=FALSE, echo=FALSE, fig.align='center', fig.cap="Sample histrograms and trace plots for Metropolis sampling and ARMS on Gamma Mixture"}
+sample_metropolis <- readRDS ("sample_metropolis.RDS")
+sample_arms <- readRDS ("sample_arms.RDS")
+df_hist_met <- data.frame(time = 1:5000, value = sample_metropolis)
+df_hist_arms <- data.frame (time = 1:5000, value = sample_arms$samples)
+df_ts_met <- data.frame(time = 1:2000, value = sample_metropolis [1:2000])
+df_ts_arms <- data.frame (time = 1:2000, value = sample_arms$samples [1:2000])
+ess_met <- round (ess (sample_metropolis))
+ess_arms <- ess (sample_arms [[2]])
+
+
+g_met <- ggplot(df_hist_met, aes(x = value)) +
+  geom_histogram(aes(y = after_stat (density)),binwidth = 1, color = "white", fill = "darkseagreen3", alpha = 0.5)+ 
+  stat_function(fun = function(x) {0.7 * dgamma(x, shape = 10, rate = .8) + 0.3 * dgamma(x, shape = 47, rate = 1.5)},
+                color = "darkslategray", lwd = 1.3) +
+  xlim(0, 48) +
+  labs(x = "Values", y = 'Relative Frequencies', 
+       title = "Sample Metropolis")+
+  theme_bw()+
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+t_met <- ggplot(df_ts_met, aes(x = time, y = value)) +
+  geom_line(color = "darkseagreen4") +
+  labs(x = "Index", y = "Value", title = "TracePlot") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+g_arms <- ggplot(df_hist_arms, aes(x = value)) +
+  geom_histogram(aes(y = after_stat (density)),binwidth = 1, color = "white", fill = "lightsteelblue2", alpha = 0.5)+ 
+  stat_function(fun = function(x) {0.7 * dgamma(x, shape = 10, rate = .8) + 0.3 * dgamma(x, shape = 47, rate = 1.5)},
+                color = "lightsteelblue4", lwd = 1.3) +
+  xlim(0, 48) +
+  labs(x = "Values", y = 'Relative Frequencies', 
+       title = "Sample ARMS")+
+  theme_bw()+
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+t_arms <- ggplot(df_ts_arms, aes(x = time, y = value)) +
+  geom_line(color = "lightsteelblue3") +
+  labs(x = "Index", y = "Value", title = "TracePlot") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+
+(g_met + t_met) / (g_arms + t_arms)  
+```
+
+```{r autocor, message=FALSE, warning=FALSE, echo=FALSE}
+chain_met <- coda::as.mcmc (df_hist_met$value)
+chain_arms <- coda::as.mcmc (df_hist_arms$value)
+lags_met <- as.vector (coda::autocorr (chain_met, lags = 1:10))
+lags_arms <- as.vector (coda::autocorr (chain_arms, lags = 1:10))
+lags_met <- round (lags_met, digits = 2)
+lags_arms <- round (lags_arms, digits = 2)
+# lags <- as.integer (seq (1, 10, 1))
+one <- c ("Metropolis", round (ess_met), lags_met)
+two <- c ("ARMS", round (ess_arms), lags_arms)
+lags_table <- t (data.frame (one,two))
+lags_table <- data.frame (lags_table)
+colnames (lags_table) <- c ("Method", "ESS", "Lag 1", "Lag 2", "Lag 3", "Lag 4", "Lag 5", "Lag 6", "Lag 7", "Lag 8", "Lag 9", "Lag 10")
+
+#kable (lags_table, caption = "Autocorrelation values", align = "c", booktabs = TRUE, digits = 2, escape = FALSE) %>%
+ # kable_styling(full_width = FALSE) %>%
+  #row_spec (2, background = "#F5E2C8")
+
+library (flextable)
+flextable(lags_table) %>%
+  set_caption("Autocorrelation values") %>%
+  align(align = "center") %>%
+  theme_booktabs() %>%
+  bold(part = "header") %>%
+  bg(i = 2, bg = "#F5E2C8")
+
+```
+
+Only initial 2000 iterations were included in  *Figure \@ref(fig:arms-met)* trace plots in order to better observe patterns, and to track how the chain behaves in the first iterations. From *Figure \@ref(fig:arms-met)* and \@ref(tab:autocor), it is evident that ARMS algorithm outperforms standard Metropolis algorithm for every diagnostic measure. This outcome is attributed to the fact that, considering the complexity of the distribution, the proposal distribution does not provide good approximation of the target density, contributing to many rejections and, subsequently, higher autocorrelation in the chain. Adaptive Rejection Metropolis sampling, however, effectively adapts the piecewise exponential envelope, tailoring it well to the target distribution, thus creating a chain with low autocorrelation that approximates the target well. 
+
+# Discussion
+
+Adaptive rejection metropolis sampling provides a way to tackle non-log-concave densities, but the efficiency of the algorithm decreases as the severity of non log-concavity increases, demonstrating a larger number of rejections. Over the recent years, some improvements to the ARMS algorithm have been proposed. One instance is using a mixture of trapezoidal densitial as the proposal, which guarantees fast and efficient sampling (@cai2008metropolis). Another possibility to improve the algorithm is to use Lagrange interpolation polynomial of the second degree to build a piecewise quadratic envelope (@meyer2008adaptive). This method is named ARMS2 and is also extended to non log-concave densities by approximating non-log-concave parts with linear interpolations. Another procedure implements stochastic variance-reduction using differential equations, and is referred to as gradient Langevin dynamics (@zou2021faster). 
+
+In conclusion, it is evident that modern computational statistics methodologies provide a wide range of algorithms to approximate complex distributions. The selection of a suitable algorithm should be guided by careful consideration of several factors, including the specific research task, the complexity of the target distribution to be approximated, and the available computational resources. 
+
+\newpage 
+
+# References
+
