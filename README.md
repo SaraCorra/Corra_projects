@@ -66,6 +66,10 @@ The repository offers a detailed exploration of univariate financial time series
 
 The analysis encompasses a wide range of aspects, including volatility patterns, data distribution, data transformation, visual representation of significant market events, and the application of GARCH models. Through preliminary data analysis, the distribution of the data is examined using histograms and boxplots, while data transformation techniques are utilized to analyze returns rather than prices. Visual analysis provides insights into the behavior of the series over time, highlighting key market events such as the Covid-19 outbreak and the Ukraine invasion. Additionally, the analysis includes the implementation of GARCH models to capture and predict changing volatility patterns inherent in financial returns data. By combining traditional time series analysis with advanced modeling techniques like GARCH, this repository aims to offer a comprehensive understanding of the dynamics of financial markets and the tools available for forecasting future trends.
 
+## ARMS - Adaptive Rejection Metropolis Hastings 
+
+The repository contains a PDF document discussing Adaptive Rejection Metropolis Sampling (ARMS) and its application in addressing challenges posed by complex statistical models, with a focus on pharmacokinetics. The document explores the importance of developing sophisticated algorithms to handle such models, using a case study on determining the appropriate dosage of gentamicin for newborns as an example. Researchers often encounter statistical models that are not straightforward to work with due to noise and measurement errors, leading them to rely on approximation algorithms like Monte Carlo methods and Markov chains. The use of ARMS offers a powerful tool for drawing inference from vague distributions, enhancing the efficiency of sampling frameworks at the expense of element independence in the chain. By understanding the concepts presented in this document, researchers can gain insights into improving algorithm efficiency and addressing complexities in computational statistics.
+
 
 
 
